@@ -87,10 +87,10 @@ def main():
         print("Waiting for the page to fully load...")
         wait_for_page_load(driver)
         print("done...")
-
+        
         elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
         href_links = [e.get_attribute("href") for e in elems]
-
+        print("Start downloading...")
         for i in href_links:
             if i.__contains__('downloadattachmentprocessor'):
                 print(i)
