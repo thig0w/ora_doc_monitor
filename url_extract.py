@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
 import os
-import requests
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+import sys
 from time import sleep
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
+from loguru import logger
+
+logger.remove(0)
+logger.add(sys.stderr, level="INFO")
 
 # Cabeçalhos para simular um navegador
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"  # noqa: E501
 }
 
 
@@ -26,7 +32,7 @@ def download_pdfs(url, folder_name="mom_func_docs"):
         # Encontrar todos os links com extensão .pdf
         pdf_links = soup.find_all("a", href=lambda href: href and href.endswith(".pdf"))
 
-        print(f"Encontrados {len(pdf_links)} PDFs.")
+        logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
 
         for link in pdf_links:
             pdf_url = link["href"]
@@ -39,24 +45,26 @@ def download_pdfs(url, folder_name="mom_func_docs"):
             filename = os.path.join(output_dir, pdf_url.split("/")[-1])
 
             # Baixar o PDF
-            print(f"Baixando: {pdf_url}")
+            logger.info(f"Downloading: {pdf_url}")
             try:
                 pdf_response = requests.get(pdf_url, headers=headers)
                 pdf_response.raise_for_status()
             except Exception as e:
-                print(f"Erro ao baixar o PDF: {e}")
+                logger.error(f"Error trying to download, re-queuing: {e}")
                 if pdf_links.count(link) < 5:
                     pdf_links.append(link)
+                else:
+                    logger.critical(f"Failed to download: {link}")
                 continue
 
             with open(filename, "wb") as pdf_file:
                 pdf_file.write(pdf_response.content)
 
-            print(f"Salvo: {filename}")
+            logger.debug(f"File Saved: {filename}")
             # sleep to avoid connection to be blocked
             sleep(1)
     except Exception as e:
-        print(f"Erro: {e}")
+        logger.error(f"Failed: {e}")
 
 
 if __name__ == "__main__":

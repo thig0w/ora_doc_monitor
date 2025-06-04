@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
+import os
+import sys
+from time import sleep, time
+
+from dotenv import load_dotenv
+from loguru import logger
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.firefox.options import Options
-import os
-from dotenv import load_dotenv
-
-
-from time import sleep, time
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 load_dotenv()
 
+logger.remove(0)
+logger.add(sys.stderr, level="INFO")
 
 file_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(file_path, exist_ok=True)
@@ -54,7 +57,7 @@ def main():
     mos_pass = os.getenv("MOSPASS")
 
     if mos_user is None or mos_pass is None:
-        print("Setar senha e pass!")
+        logger.error("Please set MOSUSER and MOSPASS environment variables!")
         return False
 
     # Inicializa o WebDriver
@@ -79,7 +82,6 @@ def main():
         wait = WebDriverWait(driver, 60)  # Ajuste o tempo se necessário
 
         # Localiza e preenche o campo de login
-        # username_field = driver.find_element(By.ID, "idcs-signin-basic-signin-form-username")
         username_field = wait.until(
             EC.visibility_of_element_located(
                 (By.ID, "idcs-signin-basic-signin-form-username")
@@ -98,30 +100,33 @@ def main():
         # Envia o formulário de login
         password_field.send_keys(Keys.RETURN)
 
+        # TODO: If oracle adds a diferent methot of 2FA, consider removing this sleep
+        logger.info("Sleeping for 60 seconds for 2FA auth")
         sleep(60)
+
         # Wait page load
-        print("Waiting first element to load...")
+        logger.debug("Waiting first element to load...")
         wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "xq1")))
-        print("Waiting for the page to fully load...")
+        logger.debug("Waiting for the page to fully load...")
         wait_for_page_load(driver)
-        print("done...")
+        logger.info("Sleep 10 seconds sometime it does not fully load")
         sleep(10)
         elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
         href_links = [e.get_attribute("href") for e in elems]
-        print("Start downloading...")
+        logger.debug("Start downloading...")
         for i in href_links:
             if i.__contains__("downloadattachmentprocessor"):
-                print(i)
+                logger.info(f"Downloading: {i}")
                 driver.execute_script(f"window.open('{i}')")
                 sleep(0.5)
 
         wait_for_downloads(file_path)
 
     except Exception as e:
-        print(f"Ocorreu um erro: {e}")
+        logger.error(f"{e}")
 
     finally:
-        # Fecha o navegador
+        # Closes the browser
         driver.quit()
         pass
 
