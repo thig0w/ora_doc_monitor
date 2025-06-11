@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import glob
 import os
 import sys
 from time import sleep, time
@@ -11,14 +12,21 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from tqdm import tqdm
 
 load_dotenv()
 
 logger.remove(0)
-logger.add(sys.stderr, level="INFO")
+logger.add(sys.stderr, level="ERROR")
 
 file_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(file_path, exist_ok=True)
+
+
+def count_files_with_extension(folder_path, extension):
+    pattern = os.path.join(folder_path, f"*{extension}")
+    files = glob.glob(pattern)
+    return len(files)
 
 
 # Função para esperar que todos os downloads sejam concluídos
@@ -30,18 +38,28 @@ def wait_for_downloads(directory, timeout=3600, poll_interval=1):
     :param timeout: Tempo máximo de espera em segundos.
     :param poll_interval: Intervalo entre verificações em segundos.
     """
-    end_time = time() + timeout
-    while time() < end_time:
-        # Verifica se existem arquivos temporários (exemplo: .crdownload ou .part)
-        if not any(
-            file.endswith(".crdownload") or file.endswith(".part")
-            for file in os.listdir(directory)
-        ):
-            return True
-        sleep(poll_interval)
-    raise TimeoutError(
-        "Os downloads não foram concluídos dentro do tempo especificado."
-    )
+    last_total = total_partial = count_files_with_extension(directory, ".part")
+
+    with tqdm(total=total_partial, desc="Waiting for Downloads") as pbar:
+        end_time = time() + timeout
+        while time() < end_time:
+            # Verifica se existem arquivos temporários (exemplo: .crdownload ou .part)
+            # if not any(
+            #     file.endswith(".crdownload") or file.endswith(".part")
+            #     for file in os.listdir(directory)
+            # ):
+            #     return True
+
+            partial = count_files_with_extension(directory, ".part")
+            pbar.update(last_total - partial)
+            last_total = partial
+            if partial == 0:
+                return True
+            sleep(poll_interval)
+
+        raise TimeoutError(
+            "Os downloads não foram concluídos dentro do tempo especificado."
+        )
 
 
 # Wait until the page is fully loaded
@@ -71,9 +89,9 @@ def main():
     )
     firefox_options.set_preference("pdfjs.disabled", True)
 
-    driver = webdriver.Firefox(options=firefox_options)
-
     try:
+        driver = webdriver.Firefox(options=firefox_options)
+
         # Abre a página de login
         url = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1"
         driver.get(url)
@@ -114,21 +132,21 @@ def main():
         elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
         href_links = [e.get_attribute("href") for e in elems]
         logger.debug("Start downloading...")
-        for i in href_links:
+        for i in tqdm(href_links, desc="Downloading Start Process"):
             if i.__contains__("downloadattachmentprocessor"):
                 logger.info(f"Downloading: {i}")
                 driver.execute_script(f"window.open('{i}')")
                 sleep(0.5)
 
         wait_for_downloads(file_path)
-
     except Exception as e:
         logger.error(f"{e}")
 
     finally:
+        # TODO: Check it asks if i want to wait downloads to finish
+        sleep(1)
         # Closes the browser
         driver.quit()
-        pass
 
 
 if __name__ == "__main__":
