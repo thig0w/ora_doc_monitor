@@ -7,9 +7,10 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from loguru import logger
+from tqdm import tqdm
 
 logger.remove(0)
-logger.add(sys.stderr, level="INFO")
+logger.add(sys.stdout, level="ERROR")
 
 # Cabeçalhos para simular um navegador
 headers = {
@@ -34,7 +35,7 @@ def download_pdfs(url, folder_name="mom_func_docs"):
 
         logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
 
-        for link in pdf_links:
+        for link in tqdm(pdf_links, desc=f"{folder_name} links"):
             pdf_url = link["href"]
 
             # Resolver URLs relativas
@@ -68,28 +69,15 @@ def download_pdfs(url, folder_name="mom_func_docs"):
 
 
 if __name__ == "__main__":
-    # Executar o download
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
-        "mfcs_docs",
-    )
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
-        "rpm_docs",
-    )
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
-        "reim_docs",
-    )
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
-        "int_docs",
-    )
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
-        "rfm_docs",
-    )
-    download_pdfs(
-        "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
-        "alloc_docs",
-    )
+    sources = {
+        "alloc_docs": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
+        "rfm_docs": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
+        "int_docs": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
+        "reim_docs": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
+        "rpm_docs": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
+        "mfcs_docs": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
+    }
+
+    for source in tqdm(sources, desc="Sources"):
+        # for source in sources:
+        download_pdfs(sources[source], source)
