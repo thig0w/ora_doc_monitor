@@ -19,8 +19,16 @@ load_dotenv()
 logger.remove(0)
 logger.add(sys.stderr, level="ERROR")
 
-file_path = os.path.join(os.getcwd(), "func_docs")
-os.makedirs(file_path, exist_ok=True)
+
+# Inicializa o WebDriver
+firefox_options = Options()
+firefox_options.set_preference("browser.download.folderList", 2)
+firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
+firefox_options.set_preference(
+    "browser.helperApps.neverAsk.saveToDisk",
+    "application/octet-stream,application/pdf",
+)
+firefox_options.set_preference("pdfjs.disabled", True)
 
 
 def count_files_with_extension(folder_path, extension):
@@ -43,13 +51,6 @@ def wait_for_downloads(directory, timeout=3600, poll_interval=1):
     with tqdm(total=total_partial, desc="Waiting for Downloads") as pbar:
         end_time = time() + timeout
         while time() < end_time:
-            # Verifica se existem arquivos temporários (exemplo: .crdownload ou .part)
-            # if not any(
-            #     file.endswith(".crdownload") or file.endswith(".part")
-            #     for file in os.listdir(directory)
-            # ):
-            #     return True
-
             partial = count_files_with_extension(directory, ".part")
             pbar.update(last_total - partial)
             last_total = partial
@@ -69,7 +70,7 @@ def wait_for_page_load(driver, timeout=30):
     )
 
 
-def main():
+def open_driver():
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
@@ -78,52 +79,65 @@ def main():
         logger.error("Please set MOSUSER and MOSPASS environment variables!")
         return False
 
-    # Inicializa o WebDriver
-    firefox_options = Options()
-    firefox_options.set_preference("browser.download.folderList", 2)
-    firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
-    firefox_options.set_preference("browser.download.dir", file_path)
-    firefox_options.set_preference(
-        "browser.helperApps.neverAsk.saveToDisk",
-        "application/octet-stream,application/pdf",
-    )
-    firefox_options.set_preference("pdfjs.disabled", True)
-
     try:
         driver = webdriver.Firefox(options=firefox_options)
 
-        # Abre a página de login
-        url = "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1"
+        # Open the Login Page
+        url = "https://support.oracle.com/epmos/faces/KmHome"
         driver.get(url)
 
-        # Aguarda a página carregar
-        wait = WebDriverWait(driver, 60)  # Ajuste o tempo se necessário
+        # Setting Driver Wait
+        wait = WebDriverWait(driver, 60)
 
-        # Localiza e preenche o campo de login
+        # Find and fill username
         username_field = wait.until(
             EC.visibility_of_element_located(
                 (By.ID, "idcs-signin-basic-signin-form-username")
             )
         )
-        username_field.send_keys(mos_user)  # Substitua por seu nome de usuário
+        username_field.send_keys(mos_user)
         username_field.send_keys(Keys.RETURN)
 
-        # Localiza e preenche o campo de senha
-        # password_field = driver.find_element(By.ID, "idcs-auth-pwd-input|input")
+        # Find and fill the Password
         password_field = wait.until(
             EC.visibility_of_element_located((By.ID, "idcs-auth-pwd-input|input"))
         )
-        password_field.send_keys(mos_pass)  # Substitua por sua senha
-
-        # Envia o formulário de login
+        password_field.send_keys(mos_pass)
         password_field.send_keys(Keys.RETURN)
 
-        # TODO: If oracle adds a diferent methot of 2FA, consider removing this sleep
-        logger.info("Sleeping for 60 seconds for 2FA auth")
-        sleep(60)
+        # Find and fill the 2fa
+        mfa_field = wait.until(
+            EC.visibility_of_element_located(
+                (By.ID, "idcs-mfa-mfa-auth-sms-email-code-input|input")
+            )
+        )
+        print("Enter the code sent to your phone: ", end="")
+        mfa_field.send_keys(input())
+        mfa_field.send_keys(Keys.RETURN)
 
+        # Must wait auth
+        sleep(10)
+
+        return driver
+    except Exception as e:
+        logger.error(f"Error trying to Open webdriver and login: {e}")
+    else:
+        driver.quit()
+
+    return None
+
+
+def download_docs(driver, url, folder_name):
+    try:
+        driver.get(url)
+        # Set download path
+        file_path = os.path.join(os.getcwd(), folder_name)
+        os.makedirs(file_path, exist_ok=True)
+        firefox_options.set_preference("browser.download.dir", file_path)
         # Wait page load
         logger.debug("Waiting first element to load...")
+        # Setting Driver Wait
+        wait = WebDriverWait(driver, 60)
         wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "xq1")))
         logger.debug("Waiting for the page to fully load...")
         wait_for_page_load(driver)
@@ -150,4 +164,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    driver = open_driver()
+    if driver is not None:
+        download_docs(
+            driver,
+            "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
+            "func_docs",
+        )
