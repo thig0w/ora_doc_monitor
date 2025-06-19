@@ -16,12 +16,17 @@ from tqdm import tqdm
 
 load_dotenv()
 
+error_level = os.getenv("LOG_LVL", "ERROR")
 logger.remove(0)
-logger.add(sys.stderr, level="ERROR")
+logger.add(sys.stderr, level=error_level)
 
 
 # Inicializa o WebDriver
 firefox_options = Options()
+# Set the download path
+file_path = os.path.join(os.getcwd(), "func_docs")
+os.makedirs(file_path, exist_ok=True)
+firefox_options.set_preference("browser.download.dir", file_path)
 firefox_options.set_preference("browser.download.folderList", 2)
 firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
 firefox_options.set_preference(
@@ -37,15 +42,8 @@ def count_files_with_extension(folder_path, extension):
     return len(files)
 
 
-# Função para esperar que todos os downloads sejam concluídos
+# Wait downloads to finish
 def wait_for_downloads(directory, timeout=3600, poll_interval=1):
-    """
-    Espera que todos os downloads na pasta sejam concluídos.
-
-    :param directory: Caminho para o diretório de downloads.
-    :param timeout: Tempo máximo de espera em segundos.
-    :param poll_interval: Intervalo entre verificações em segundos.
-    """
     last_total = total_partial = count_files_with_extension(directory, ".part")
 
     with tqdm(total=total_partial, desc="Waiting for Downloads") as pbar:
@@ -58,9 +56,7 @@ def wait_for_downloads(directory, timeout=3600, poll_interval=1):
                 return True
             sleep(poll_interval)
 
-        raise TimeoutError(
-            "Os downloads não foram concluídos dentro do tempo especificado."
-        )
+        raise TimeoutError("Downloads were not concluded during the specified time.")
 
 
 # Wait until the page is fully loaded
@@ -127,38 +123,35 @@ def open_driver():
     return None
 
 
-def download_docs(driver, url, folder_name):
+def download_docs(driver, urls: list):
     try:
-        driver.get(url)
-        # Set download path
-        file_path = os.path.join(os.getcwd(), folder_name)
-        os.makedirs(file_path, exist_ok=True)
-        firefox_options.set_preference("browser.download.dir", file_path)
-        # Wait page load
-        logger.debug("Waiting first element to load...")
-        # Setting Driver Wait
-        wait = WebDriverWait(driver, 60)
-        wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "xq1")))
-        logger.debug("Waiting for the page to fully load...")
-        wait_for_page_load(driver)
-        logger.info("Sleep 10 seconds sometime it does not fully load")
-        sleep(10)
-        elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
-        href_links = [e.get_attribute("href") for e in elems]
-        logger.debug("Start downloading...")
-        for i in tqdm(href_links, desc="Downloading Start Process"):
-            if i.__contains__("downloadattachmentprocessor"):
-                logger.info(f"Downloading: {i}")
-                driver.execute_script(f"window.open('{i}')")
-                sleep(0.5)
+        for url in urls:
+            driver.get(url)
+
+            # Wait page load
+            logger.debug("Waiting first element to load...")
+            # Setting Driver Wait
+            wait = WebDriverWait(driver, 60)
+            wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "xq1")))
+            logger.debug("Waiting for the page to fully load...")
+            wait_for_page_load(driver)
+            logger.info("Sleep 10 seconds sometime it does not fully load")
+            sleep(10)
+            elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
+            href_links = [e.get_attribute("href") for e in elems]
+            logger.debug("Start downloading...")
+            for i in tqdm(href_links, desc="Downloading Start Process"):
+                if i.__contains__("downloadattachmentprocessor"):
+                    logger.info(f"Downloading: {i}")
+                    driver.execute_script(f"window.open('{i}')")
+                    sleep(0.5)
 
         wait_for_downloads(file_path)
+
     except Exception as e:
         logger.error(f"{e}")
 
     finally:
-        # TODO: Check it asks if i want to wait downloads to finish
-        sleep(1)
         # Closes the browser
         driver.quit()
 
@@ -166,8 +159,23 @@ def download_docs(driver, url, folder_name):
 if __name__ == "__main__":
     driver = open_driver()
     if driver is not None:
+        # merch doc lib
         download_docs(
             driver,
-            "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
-            "func_docs",
+            [
+                # Merch functional docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
+                # Extensions docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2978473.1",
+                # Rics func docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2643542.1",
+                # RDS func docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2899701.1",
+                # POM func docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2815461.1",
+                # Localization func docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2534504.2",
+                # blueprint func docs
+                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2677553.1",
+            ],
         )
