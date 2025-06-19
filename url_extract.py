@@ -9,43 +9,41 @@ from bs4 import BeautifulSoup
 from loguru import logger
 from tqdm import tqdm
 
+error_level = os.getenv("LOG_LVL", "ERROR")
 logger.remove(0)
-logger.add(sys.stdout, level="ERROR")
+logger.add(sys.stderr, level=error_level)
 
-# Cabeçalhos para simular um navegador
+# Simulates a browser
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"  # noqa: E501
 }
 
 
 def download_pdfs(url, folder_name="mom_func_docs"):
-    # Diretório para salvar os PDFs
+    # makes a foler to download files
     output_dir = os.path.join(os.getcwd(), folder_name)
     os.makedirs(output_dir, exist_ok=True)
     try:
-        # Solicitação da página
         response = requests.get(url, headers=headers)
         response.raise_for_status()
 
-        # Parsear o conteúdo HTML
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Encontrar todos os links com extensão .pdf
+        # Finds all .pdf files
         pdf_links = soup.find_all("a", href=lambda href: href and href.endswith(".pdf"))
 
         logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
-
         for link in tqdm(pdf_links, desc=f"{folder_name} links"):
             pdf_url = link["href"]
 
-            # Resolver URLs relativas
+            # appends the url for relative links
             if not pdf_url.startswith("http"):
                 pdf_url = urljoin(url, pdf_url)
 
-            # Nome do arquivo
+            # generate the file name from the url name
             filename = os.path.join(output_dir, pdf_url.split("/")[-1])
 
-            # Baixar o PDF
+            # Dowload the file
             logger.info(f"Downloading: {pdf_url}")
             try:
                 pdf_response = requests.get(pdf_url, headers=headers)
