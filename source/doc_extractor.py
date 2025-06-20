@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 import glob
 import os
-import sys
 from time import sleep, time
 
 from dotenv import load_dotenv
-from loguru import logger
+from logger import logger
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -16,13 +15,12 @@ from tqdm import tqdm
 
 load_dotenv()
 
-error_level = os.getenv("LOG_LVL", "ERROR")
-logger.remove(0)
-logger.add(sys.stderr, level=error_level)
 
+driver: webdriver = None
 
 # Inicializa o WebDriver
 firefox_options = Options()
+firefox_options.headless = True
 # Set the download path
 file_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(file_path, exist_ok=True)
@@ -66,7 +64,7 @@ def wait_for_page_load(driver, timeout=30):
     )
 
 
-def open_driver():
+def open_driver() -> webdriver:
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
@@ -123,8 +121,11 @@ def open_driver():
     return None
 
 
-def download_docs(driver, urls: list):
+def download_docs(urls: list, driver: webdriver = None):
     try:
+        if driver is None:
+            driver = open_driver()
+
         for url in urls:
             driver.get(url)
 
@@ -161,7 +162,6 @@ if __name__ == "__main__":
     if driver is not None:
         # merch doc lib
         download_docs(
-            driver,
             [
                 # Merch functional docs
                 "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
@@ -178,4 +178,5 @@ if __name__ == "__main__":
                 # blueprint func docs
                 "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2677553.1",
             ],
+            driver,
         )
