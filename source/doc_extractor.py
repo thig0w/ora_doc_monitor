@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import glob
 import os
+import threading
 from time import sleep, time
 
 from dotenv import load_dotenv
@@ -20,18 +21,25 @@ driver: webdriver = None
 
 # Inicializa o WebDriver
 firefox_options = Options()
-firefox_options.headless = True
 # Set the download path
 file_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(file_path, exist_ok=True)
 firefox_options.set_preference("browser.download.dir", file_path)
 firefox_options.set_preference("browser.download.folderList", 2)
 firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
+# TODO: create a parameter to run it headed
+firefox_options.add_argument("--headless")
 firefox_options.set_preference(
     "browser.helperApps.neverAsk.saveToDisk",
     "application/octet-stream,application/pdf",
 )
 firefox_options.set_preference("pdfjs.disabled", True)
+
+
+def watchdog():
+    logger.error("Watchdog expired. Exiting...")
+    # TODO: Kill all firefox processes
+    os._exit(1)
 
 
 def count_files_with_extension(folder_path, extension):
@@ -153,8 +161,12 @@ def download_docs(urls: list, driver: webdriver = None):
         logger.error(f"{e}")
 
     finally:
+        delay_secs = 4
+        alarm = threading.Timer(delay_secs, watchdog)
+        alarm.start()
         # Closes the browser
         driver.quit()
+        alarm.cancel()
 
 
 if __name__ == "__main__":
