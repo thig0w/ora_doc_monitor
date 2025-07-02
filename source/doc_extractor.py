@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 import glob
 import os
-import sys
+import threading
 from time import sleep, time
 
 from dotenv import load_dotenv
-from loguru import logger
+from logger import logger
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -16,10 +16,8 @@ from tqdm import tqdm
 
 load_dotenv()
 
-error_level = os.getenv("LOG_LVL", "ERROR")
-logger.remove(0)
-logger.add(sys.stderr, level=error_level)
 
+driver: webdriver = None
 
 # Inicializa o WebDriver
 firefox_options = Options()
@@ -29,11 +27,19 @@ os.makedirs(file_path, exist_ok=True)
 firefox_options.set_preference("browser.download.dir", file_path)
 firefox_options.set_preference("browser.download.folderList", 2)
 firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
+# TODO: create a parameter to run it headed
+firefox_options.add_argument("--headless")
 firefox_options.set_preference(
     "browser.helperApps.neverAsk.saveToDisk",
     "application/octet-stream,application/pdf",
 )
 firefox_options.set_preference("pdfjs.disabled", True)
+
+
+def watchdog():
+    logger.error("Watchdog expired. Exiting...")
+    # TODO: Kill all firefox processes
+    os._exit(1)
 
 
 def count_files_with_extension(folder_path, extension):
@@ -66,7 +72,7 @@ def wait_for_page_load(driver, timeout=30):
     )
 
 
-def open_driver():
+def open_driver() -> webdriver:
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
@@ -123,8 +129,11 @@ def open_driver():
     return None
 
 
-def download_docs(driver, urls: list):
+def download_docs(urls: list, driver: webdriver = None):
     try:
+        if driver is None:
+            driver = open_driver()
+
         for url in urls:
             driver.get(url)
 
@@ -152,8 +161,12 @@ def download_docs(driver, urls: list):
         logger.error(f"{e}")
 
     finally:
+        delay_secs = 4
+        alarm = threading.Timer(delay_secs, watchdog)
+        alarm.start()
         # Closes the browser
         driver.quit()
+        alarm.cancel()
 
 
 if __name__ == "__main__":
@@ -161,7 +174,6 @@ if __name__ == "__main__":
     if driver is not None:
         # merch doc lib
         download_docs(
-            driver,
             [
                 # Merch functional docs
                 "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
@@ -178,4 +190,5 @@ if __name__ == "__main__":
                 # blueprint func docs
                 "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2677553.1",
             ],
+            driver,
         )
