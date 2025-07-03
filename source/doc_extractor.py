@@ -4,13 +4,14 @@ import os
 import threading
 from time import sleep, time
 
+import psutil
 from dotenv import load_dotenv
 from logger import logger
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
 
@@ -19,7 +20,7 @@ load_dotenv()
 
 driver: webdriver = None
 
-# Inicializa o WebDriver
+# Init WebDriver
 firefox_options = Options()
 # Set the download path
 file_path = os.path.join(os.getcwd(), "func_docs")
@@ -38,8 +39,14 @@ firefox_options.set_preference("pdfjs.disabled", True)
 
 def watchdog():
     logger.error("Watchdog expired. Exiting...")
-    # TODO: Kill all firefox processes
-    os._exit(1)
+    child_process = psutil.Process(os.getpid()).children(recursive=True)
+    for process in child_process:
+        logger.error(f"Killing child process: {process.pid} - {process.name()}")
+        try:
+            process.kill()
+        except psutil.NoSuchProcess as e:
+            logger.error(f"Error trying to terminate child process: {e}")
+            continue
 
 
 def count_files_with_extension(folder_path, extension):
@@ -52,7 +59,7 @@ def count_files_with_extension(folder_path, extension):
 def wait_for_downloads(directory, timeout=3600, poll_interval=1):
     last_total = total_partial = count_files_with_extension(directory, ".part")
 
-    with tqdm(total=total_partial, desc="Waiting for Downloads") as pbar:
+    with tqdm(total=total_partial, desc="Waiting for Downloads to finish") as pbar:
         end_time = time() + timeout
         while time() < end_time:
             partial = count_files_with_extension(directory, ".part")
@@ -93,7 +100,7 @@ def open_driver() -> webdriver:
 
         # Find and fill username
         username_field = wait.until(
-            EC.visibility_of_element_located(
+            ec.visibility_of_element_located(
                 (By.ID, "idcs-signin-basic-signin-form-username")
             )
         )
@@ -102,14 +109,14 @@ def open_driver() -> webdriver:
 
         # Find and fill the Password
         password_field = wait.until(
-            EC.visibility_of_element_located((By.ID, "idcs-auth-pwd-input|input"))
+            ec.visibility_of_element_located((By.ID, "idcs-auth-pwd-input|input"))
         )
         password_field.send_keys(mos_pass)
         password_field.send_keys(Keys.RETURN)
 
         # Find and fill the 2fa
         mfa_field = wait.until(
-            EC.visibility_of_element_located(
+            ec.visibility_of_element_located(
                 (By.ID, "idcs-mfa-mfa-auth-sms-email-code-input|input")
             )
         )
@@ -141,7 +148,7 @@ def download_docs(urls: list, driver: webdriver = None):
             logger.debug("Waiting first element to load...")
             # Setting Driver Wait
             wait = WebDriverWait(driver, 60)
-            wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "xq1")))
+            wait.until(ec.visibility_of_element_located((By.CLASS_NAME, "xq1")))
             logger.debug("Waiting for the page to fully load...")
             wait_for_page_load(driver)
             logger.info("Sleep 10 seconds sometime it does not fully load")
@@ -149,7 +156,9 @@ def download_docs(urls: list, driver: webdriver = None):
             elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
             href_links = [e.get_attribute("href") for e in elems]
             logger.debug("Start downloading...")
-            for i in tqdm(href_links, desc="Downloading Start Process"):
+            for i in tqdm(
+                href_links, desc=f"Downloading files from docid {url.split('=')[1]}"
+            ):
                 if i.__contains__("downloadattachmentprocessor"):
                     logger.info(f"Downloading: {i}")
                     driver.execute_script(f"window.open('{i}')")
