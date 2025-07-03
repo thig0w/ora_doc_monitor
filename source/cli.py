@@ -10,9 +10,12 @@ from url_extract import download_pdfs
 
 
 @click.command()
-@click.option("-a", "--auth_docs", is_flag=True)
-@click.option("-n", "--no_auth_docs", is_flag=True)
-def get_docs(auth_docs, no_auth_docs):  # (year, start_month):
+@click.option(
+    "-a", "--auth_docs", is_flag=True, help="Download docs with authentication required"
+)
+@click.option("-n", "--no_auth_docs", is_flag=True, help="Download docs without auth")
+@click.option("-h", "--headed", is_flag=True, help="Run browser in headless mode")
+def get_docs(auth_docs, no_auth_docs, headed):  # (year, start_month):
     is_both = not (auth_docs or no_auth_docs)
     logger.info("Starting from CLI")
 
@@ -46,7 +49,7 @@ def get_docs(auth_docs, no_auth_docs):  # (year, start_month):
 
     # infos that need auth
     if auth_docs or is_both:
-        driver = open_driver()
+        driver = open_driver(headed=headed)
         if driver is None:
             sys.exit(1)
         thread_docs_auth = threading.Thread(
