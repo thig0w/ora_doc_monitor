@@ -17,24 +17,11 @@ from tqdm import tqdm
 
 load_dotenv()
 
-
 driver: webdriver = None
 
-# Init WebDriver
-firefox_options = Options()
 # Set the download path
 file_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(file_path, exist_ok=True)
-firefox_options.set_preference("browser.download.dir", file_path)
-firefox_options.set_preference("browser.download.folderList", 2)
-firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
-# TODO: create a parameter to run it headed
-firefox_options.add_argument("--headless")
-firefox_options.set_preference(
-    "browser.helperApps.neverAsk.saveToDisk",
-    "application/octet-stream,application/pdf",
-)
-firefox_options.set_preference("pdfjs.disabled", True)
 
 
 def watchdog():
@@ -79,10 +66,23 @@ def wait_for_page_load(driver, timeout=30):
     )
 
 
-def open_driver() -> webdriver:
+def open_driver(headed: bool = False) -> webdriver:
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
+
+    # Init WebDriver options
+    firefox_options = Options()
+    firefox_options.set_preference("browser.download.dir", file_path)
+    firefox_options.set_preference("browser.download.folderList", 2)
+    firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
+    firefox_options.set_preference(
+        "browser.helperApps.neverAsk.saveToDisk",
+        "application/octet-stream,application/pdf",
+    )
+    firefox_options.set_preference("pdfjs.disabled", True)
+    if not headed:
+        firefox_options.add_argument("--headless")
 
     if mos_user is None or mos_pass is None:
         logger.error("Please set MOSUSER and MOSPASS environment variables!")
