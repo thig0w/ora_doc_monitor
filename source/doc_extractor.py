@@ -136,13 +136,14 @@ def open_driver(headed: bool = False) -> webdriver:
     return None
 
 
-def download_docs(urls: list, driver: webdriver = None):
+def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
+    base_url = "https://support.oracle.com/epmos/faces/DocumentDisplay?id="
     try:
         if driver is None:
             driver = open_driver()
 
-        for url in urls:
-            driver.get(url)
+        for source in sources:
+            driver.get(base_url + source["doc_id"])
 
             # Wait page load
             logger.debug("Waiting first element to load...")
@@ -157,7 +158,7 @@ def download_docs(urls: list, driver: webdriver = None):
             href_links = [e.get_attribute("href") for e in elems]
             logger.debug("Start downloading...")
             for i in tqdm(
-                href_links, desc=f"Downloading files from docid {url.split('=')[1]}"
+                href_links, desc=f"Downloading files from docid {source['doc_id']}"
             ):
                 if i.__contains__("downloadattachmentprocessor"):
                     logger.info(f"Downloading: {i}")
@@ -179,25 +180,19 @@ def download_docs(urls: list, driver: webdriver = None):
 
 
 if __name__ == "__main__":
-    driver = open_driver()
+    driver = open_driver(True)
     if driver is not None:
         # merch doc lib
         download_docs(
             [
-                # Merch functional docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
-                # Extensions docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2978473.1",
-                # Rics func docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2643542.1",
-                # RDS func docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2899701.1",
-                # POM func docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2815461.1",
-                # Localization func docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2534504.2",
-                # blueprint func docs
-                "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2677553.1",
+                {"desc": "Merch functional docs", "doc_id": "1585843.1"},
+                {"desc": "Extensions docs", "doc_id": "2978473.1"},
+                {"desc": "Rics func docs", "doc_id": "2643542.1"},
+                {"desc": "RDS func docs", "doc_id": "2899701.1"},
+                {"desc": "RDS func docs", "doc_id": "2899701.1"},
+                {"desc": "POM func docs", "doc_id": "2815461.1"},
+                {"desc": "Locatization func docs", "doc_id": "2534504.2"},
+                {"desc": "blueprint func docs", "doc_id": "2677553.1"},
             ],
             driver,
         )

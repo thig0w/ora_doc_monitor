@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import os
 import sys
 import threading
 
@@ -12,7 +13,8 @@ from url_extractor import download_pdfs
 
 def read_json():
     logger.info("Reading json file")
-    with open("doc_sources.json") as f:
+    file_path = os.path.join(os.path.dirname(__file__), "doc_sources.json")
+    with open(file_path) as f:
         return json.load(f)
 
 
