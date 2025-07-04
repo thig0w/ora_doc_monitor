@@ -14,13 +14,13 @@ headers = {
 }
 
 
-def download_pdfs(sources: dict[str, str]):
+def download_pdfs(sources: list[dict[str, str]]):
     for source in tqdm(sources, desc="Sources"):
         # makes a foler to download files
-        output_dir = os.path.join(os.getcwd(), source)
+        output_dir = os.path.join(os.getcwd(), source["desc"])
         os.makedirs(output_dir, exist_ok=True)
         try:
-            response = requests.get(sources[source], headers=headers)
+            response = requests.get(source["doc_id"], headers=headers)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
@@ -31,12 +31,12 @@ def download_pdfs(sources: dict[str, str]):
             )
 
             logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
-            for link in tqdm(pdf_links, desc=f"{source} links"):
+            for link in tqdm(pdf_links, desc=f"{source['desc']} links"):
                 pdf_url = link["href"]
 
                 # appends the url for relative links
                 if not pdf_url.startswith("http"):
-                    pdf_url = urljoin(sources[source], pdf_url)
+                    pdf_url = urljoin(source["doc_id"], pdf_url)
 
                 # generate the file name from the url name
                 filename = os.path.join(output_dir, pdf_url.split("/")[-1])
@@ -65,14 +65,32 @@ def download_pdfs(sources: dict[str, str]):
 
 
 if __name__ == "__main__":
-    sources = {
-        "alloc_docs": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
-        "rfm_docs": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
-        "int_docs": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
-        "reim_docs": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
-        "rpm_docs": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
-        "mfcs_docs": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
-    }
+    sources = [
+        {
+            "desc": "alloc_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
+        },
+        {
+            "desc": "rfm_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
+        },
+        {
+            "desc": "int_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
+        },
+        {
+            "desc": "reim_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
+        },
+        {
+            "desc": "rpm_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
+        },
+        {
+            "desc": "mfcs_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
+        },
+    ]
 
     # for source in sources:
     download_pdfs(sources)

@@ -1,0 +1,62 @@
+{
+    "auth_req": [
+        {
+            "desc": "Merch functional docs",
+            "doc_id": "1585843.1"
+        },
+        {
+            "desc": "Extensions docs",
+            "doc_id": "2978473.1"
+        },
+        {
+            "desc": "Rics func docs",
+            "doc_id": "2643542.1"
+        },
+        {
+            "desc": "RDS func docs",
+            "doc_id": "2899701.1"
+        },
+        {
+            "desc": "RDS func docs",
+            "doc_id": "2899701.1"
+        },
+        {
+            "desc": "POM func docs",
+            "doc_id": "2815461.1"
+        },
+        {
+            "desc": "Locatization func docs",
+            "doc_id": "2534504.2"
+        },
+        {
+            "desc": "blueprint func docs",
+            "doc_id": "2677553.1"
+        }
+    ],
+    "noauth_req": [
+        {
+            "desc": "alloc_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html"
+        },
+        {
+            "desc": "rfm_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html"
+        },
+        {
+            "desc": "int_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html"
+        },
+        {
+            "desc": "reim_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html"
+        },
+        {
+            "desc": "rpm_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html"
+        },
+        {
+            "desc": "mfcs_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html"
+        }
+    ]
+}
