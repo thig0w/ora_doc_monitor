@@ -13,6 +13,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.support.ui import WebDriverWait
+
+# TODO: replace tqdm with rich
 from tqdm import tqdm
 
 load_dotenv()

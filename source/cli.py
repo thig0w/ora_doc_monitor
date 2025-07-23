@@ -28,35 +28,8 @@ def get_docs(auth_docs, no_auth_docs, headed):  # (year, start_month):
     is_both = not (auth_docs or no_auth_docs)
     logger.info("Starting from CLI")
 
+    # read the source file
     doc_sources = read_json()
-
-    # # TODO: transform the sources into a config file
-    # auth_sources = [
-    #     # Merch functional docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=1585843.1",
-    #     # Extensions docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2978473.1",
-    #     # Rics func docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2643542.1",
-    #     # RDS func docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2899701.1",
-    #     # POM func docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2815461.1",
-    #     # Localization func docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2534504.2",
-    #     # blueprint func docs
-    #     "https://support.oracle.com/epmos/faces/DocumentDisplay?id=2677553.1",
-    # ]
-    #
-    # # no auth sources
-    # sources = {
-    #     "alloc_docs": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
-    #     "rfm_docs": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
-    #     "int_docs": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
-    #     "reim_docs": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
-    #     "rpm_docs": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
-    #     "mfcs_docs": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
-    # }
 
     # infos that need auth
     if auth_docs or is_both:

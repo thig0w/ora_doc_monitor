@@ -6,6 +6,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from logger import logger
+
+# TODO: replace tqdm with rich
 from tqdm import tqdm
 
 # Simulates a browser
