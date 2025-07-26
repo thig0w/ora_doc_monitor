@@ -5,10 +5,7 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
-from logger import logger
-
-# TODO: replace tqdm with rich
-from tqdm import tqdm
+from interface import logger, progressbar
 
 # Simulates a browser
 headers = {
@@ -17,7 +14,8 @@ headers = {
 
 
 def download_pdfs(sources: list[dict[str, str]]):
-    for source in tqdm(sources, desc="Sources"):
+    progressbar.start()
+    for source in progressbar.track(sources, description="Sources"):
         # makes a foler to download files
         output_dir = os.path.join(os.getcwd(), source["desc"])
         os.makedirs(output_dir, exist_ok=True)
@@ -33,7 +31,9 @@ def download_pdfs(sources: list[dict[str, str]]):
             )
 
             logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
-            for link in tqdm(pdf_links, desc=f"{source['desc']} links"):
+            for link in progressbar.track(
+                pdf_links, description=f"{source['desc']} links"
+            ):
                 pdf_url = link["href"]
 
                 # appends the url for relative links

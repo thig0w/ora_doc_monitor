@@ -2,8 +2,7 @@
 import filecmp
 import os
 
-from interface import progressbar
-from logger import logger
+from interface import logger, progressbar
 from rich.table import Table
 
 
@@ -13,7 +12,11 @@ def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     table.add_column("Left File", justify="center", style="magenta")
     table.add_column("Right File", justify="center", style="green")
 
-    for diff in diff_tab:
+    clean_table = [
+        [a, os.path.basename(b), os.path.basename(c)] for a, b, c in diff_tab
+    ]
+
+    for diff in clean_table:
         table.add_row(*diff)
 
     # console.print(table)

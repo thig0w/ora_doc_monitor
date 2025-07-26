@@ -7,7 +7,7 @@ import threading
 
 import click
 from doc_extractor import download_docs, open_driver
-from logger import logger
+from interface import logger
 from url_extractor import download_pdfs
 
 
