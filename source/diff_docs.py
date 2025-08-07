@@ -29,7 +29,7 @@ def comp_folders(dir1, dir2, desc: str = ""):
     diff_tab: list[tuple[str, str, str]] = []
 
     # Add a main task for the overall comparison
-    main_diff_task = progressbar.add_task(  # noqa:F841
+    diff_task = progressbar.add_task(  # noqa:F841
         f"[cyan]Comparing directories for {desc}...", total=None
     )
     progressbar.start()
@@ -54,14 +54,62 @@ def comp_folders(dir1, dir2, desc: str = ""):
         table = draw_result_table(diff_tab, desc)
         progressbar.log(table)
 
+    progressbar.stop_task(diff_task)
     progressbar.stop()
 
 
-if __name__ == "__main__":
+def diff_all_folders(noauth_source: list[dict[str, str]]):
+    # TODO: Thread this
     comp_folders(
-        os.path.join(os.getcwd(), "../func_docs"),
-        os.path.join(os.getcwd(), "../func_docs_old"),
+        os.path.join(os.getcwd(), "func_docs"),
+        os.path.join(os.getcwd(), "func_docs_old"),
         "func_docs",
     )
+
+    for i in noauth_source:
+        comp_folders(
+            os.path.join(os.getcwd(), f"{i['desc']}"),
+            os.path.join(os.getcwd(), f"{i['desc']}_old"),
+            f"{i['desc']}",
+        )
+
+
+if __name__ == "__main__":
+    doc_sources = {
+        "noauth_req": [
+            {
+                "desc": "alloc_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-allocation-cloud/latest/books.html",
+            },
+            {
+                "desc": "rfm_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-fiscal-management/latest/books.html",
+            },
+            {
+                "desc": "int_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-integration-cloud/latest/books.html",
+            },
+            {
+                "desc": "reim_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-invoice-matching-cloud/latest/books.html",
+            },
+            {
+                "desc": "rpm_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-pricing-cloud/latest/books.html",
+            },
+            {
+                "desc": "mfcs_docs",
+                "doc_id": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html",
+            },
+        ]
+    }
+
+    diff_all_folders(doc_sources["noauth_req"])
+
+    # comp_folders(
+    #     os.path.join(os.getcwd(), "../func_docs"),
+    #     os.path.join(os.getcwd(), "../func_docs_old"),
+    #     "func_docs",
+    # )
     # draw_result_table([("left","file1","file2"),
     #                    ("right","","file4")])
