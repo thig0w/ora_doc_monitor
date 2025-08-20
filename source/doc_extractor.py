@@ -7,6 +7,7 @@ from time import sleep, time
 import psutil
 from dotenv import load_dotenv
 from interface import logger, progressbar
+from pyotp import TOTP
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -71,6 +72,7 @@ def open_driver(headed: bool = False) -> webdriver:
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
+    mos_mfa_key = os.getenv("MOSMFAKEY")
 
     # Init WebDriver options
     firefox_options = Options()
@@ -118,11 +120,11 @@ def open_driver(headed: bool = False) -> webdriver:
         # Find and fill the 2fa
         mfa_field = wait.until(
             ec.visibility_of_element_located(
-                (By.ID, "idcs-mfa-mfa-auth-sms-email-code-input|input")
+                (By.ID, "idcs-mfa-mfa-auth-passcode-input|input")
             )
         )
-        print("Enter the code sent to your phone: ", end="")
-        mfa_field.send_keys(input())
+        logger.debug(f"TOPT sent {TOTP(mos_mfa_key).now()}")
+        mfa_field.send_keys(TOTP(mos_mfa_key).now())
         mfa_field.send_keys(Keys.RETURN)
 
         # Must wait auth
