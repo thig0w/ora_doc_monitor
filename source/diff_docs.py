@@ -19,12 +19,13 @@ def create_version_folder(folder_name: str = ""):
 
 def copy_files(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     diff_file_path = create_version_folder(desc)
-    for i in diff_tab:
-        # TODO: add suffix instead of prefix
-        if i[1] != "":
-            shutil.copy(i[1], f"{diff_file_path}/N_{os.path.basename(i[1])}")
-        if i[2] != "":
-            shutil.copy(i[2], f"{diff_file_path}/O_{os.path.basename(i[2])}")
+    for file in diff_tab:
+        if file[1] != "":
+            root, extension = os.path.splitext(os.path.basename(file[1]))
+            shutil.copy(file[1], f"{diff_file_path}/{root}_new{extension}")
+        if file[2] != "":
+            root, extension = os.path.splitext(os.path.basename(file[2]))
+            shutil.copy(file[2], f"{diff_file_path}/{root}_old{extension}")
 
 
 def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
@@ -46,6 +47,9 @@ def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
 
 def comp_folders(dir1, dir2, desc: str = ""):
     logger.info(f"Comparing folders: {dir1} and {dir2}")
+    if len(os.listdir(dir1)) == 0:
+        logger.info(f"No files found in {dir1}")
+        return
     logger.info(f"Starting diff report for {desc}...")
     diff_tab: list[tuple[str, str, str]] = []
 
