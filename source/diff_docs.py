@@ -1,9 +1,30 @@
 # -*- coding: utf-8 -*-
 import filecmp
 import os
+import shutil
+from datetime import datetime
 
 from interface import logger, progressbar
 from rich.table import Table
+
+now = datetime.now()
+
+
+def create_version_folder(folder_name: str = ""):
+    # Set the download path
+    file_path = os.path.join(os.getcwd(), f"df_{now:%Y%m%d%H%M}/{folder_name}")
+    os.makedirs(file_path, exist_ok=True)
+    return file_path
+
+
+def copy_files(diff_tab: list[tuple[str, str, str]], desc: str = ""):
+    diff_file_path = create_version_folder(desc)
+    for i in diff_tab:
+        # TODO: add suffix instead of prefix
+        if i[1] != "":
+            shutil.copy(i[1], f"{diff_file_path}/N_{os.path.basename(i[1])}")
+        if i[2] != "":
+            shutil.copy(i[2], f"{diff_file_path}/O_{os.path.basename(i[2])}")
 
 
 def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
@@ -52,6 +73,7 @@ def comp_folders(dir1, dir2, desc: str = ""):
 
     if len(diff_tab) > 0:
         table = draw_result_table(diff_tab, desc)
+        copy_files(diff_tab, desc)
         progressbar.log(table)
 
     progressbar.stop_task(diff_task)
