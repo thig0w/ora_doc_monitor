@@ -31,6 +31,14 @@
         {
             "desc": "blueprint func docs",
             "doc_id": "2677553.1"
+        },
+        {
+            "desc": "Data Models",
+            "doc_id": "3062423.1"
+        },
+        {
+            "desc": "Advanced Release Notes",
+            "doc_id": "2704051.1"
         }
     ],
     "noauth_req": [
@@ -57,6 +65,10 @@
         {
             "desc": "mfcs_docs",
             "doc_id": "https://docs.oracle.com/en/industries/retail/retail-merchandising-foundation-cloud/latest/books.html"
+        },
+        {
+            "desc": "aif_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/ai-foundation-cloud-service/25.2.301.0/books.html"
         }
     ]
 }

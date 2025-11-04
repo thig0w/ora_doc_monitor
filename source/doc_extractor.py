@@ -6,14 +6,14 @@ from time import sleep, time
 
 import psutil
 from dotenv import load_dotenv
-from logger import logger
+from interface import logger, progressbar
+from pyotp import TOTP
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.support.ui import WebDriverWait
-from tqdm import tqdm
 
 load_dotenv()
 
@@ -44,19 +44,21 @@ def count_files_with_extension(folder_path, extension):
 
 # Wait downloads to finish
 def wait_for_downloads(directory, timeout=3600, poll_interval=1):
-    last_total = total_partial = count_files_with_extension(directory, ".part")
+    total = count_files_with_extension(directory, ".part")
 
-    with tqdm(total=total_partial, desc="Waiting for Downloads to finish") as pbar:
-        end_time = time() + timeout
-        while time() < end_time:
-            partial = count_files_with_extension(directory, ".part")
-            pbar.update(last_total - partial)
-            last_total = partial
-            if partial == 0:
-                return True
-            sleep(poll_interval)
+    wait_bar = progressbar.add_task(
+        "[cyan]Waiting for Downloads to finish...", total=total
+    )
 
-        raise TimeoutError("Downloads were not concluded during the specified time.")
+    end_time = time() + timeout
+    while time() < end_time:
+        partial = count_files_with_extension(directory, ".part")
+        progressbar.update(wait_bar, completed=max(total - partial, 0))
+        if partial == 0:
+            return True
+        sleep(poll_interval)
+
+    raise TimeoutError("Downloads were not concluded during the specified time.")
 
 
 # Wait until the page is fully loaded
@@ -70,6 +72,7 @@ def open_driver(headed: bool = False) -> webdriver:
     # Get user/pass
     mos_user = os.getenv("MOSUSER")
     mos_pass = os.getenv("MOSPASS")
+    mos_mfa_key = os.getenv("MOSMFAKEY")
 
     # Init WebDriver options
     firefox_options = Options()
@@ -117,11 +120,11 @@ def open_driver(headed: bool = False) -> webdriver:
         # Find and fill the 2fa
         mfa_field = wait.until(
             ec.visibility_of_element_located(
-                (By.ID, "idcs-mfa-mfa-auth-sms-email-code-input|input")
+                (By.ID, "idcs-mfa-mfa-auth-passcode-input|input")
             )
         )
-        print("Enter the code sent to your phone: ", end="")
-        mfa_field.send_keys(input())
+        logger.debug(f"TOPT sent {TOTP(mos_mfa_key).now()}")
+        mfa_field.send_keys(TOTP(mos_mfa_key).now())
         mfa_field.send_keys(Keys.RETURN)
 
         # Must wait auth
@@ -157,8 +160,11 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
             elems = driver.find_elements(by=By.XPATH, value="//a[@href]")
             href_links = [e.get_attribute("href") for e in elems]
             logger.debug("Start downloading...")
-            for i in tqdm(
-                href_links, desc=f"Downloading files from docid {source['doc_id']}"
+            progressbar.start()
+
+            for i in progressbar.track(
+                href_links,
+                description=f"Downloading files from docid {source['doc_id']}",
             ):
                 if i.__contains__("downloadattachmentprocessor"):
                     logger.info(f"Downloading: {i}")
@@ -166,6 +172,7 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
                     sleep(0.5)
 
         wait_for_downloads(file_path)
+        progressbar.stop()
 
     except Exception as e:
         logger.error(f"{e}")

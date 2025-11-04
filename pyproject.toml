@@ -1,6 +1,6 @@
 [project]
 name = "oradocmonitor"
-version = "0.3.0"
+version = "0.5.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,10 +9,11 @@ dependencies = [
     "click>=8.2.1",
     "loguru>=0.7.3",
     "psutil>=7.0.0",
+    "pyotp>=2.9.0",
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
+    "rich>=14.0.0",
     "selenium>=4.27.1",
-    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]
