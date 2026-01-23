@@ -241,7 +241,10 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
             wait = WebDriverWait(driver, 60)
 
             href_links = execute_with_retry(
-                lambda: load_page_and_collect_links(wait, source["doc_id"]),  # noqa
+                lambda: load_page_and_collect_links(
+                    wait,  # noqa: B023
+                    source["doc_id"],  # noqa: B023
+                ),
                 retries=3,
             )
 
@@ -260,20 +263,29 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
                 #     logger.info(f"Downloading: {i}")
                 #     driver.execute_script(f"window.open('{i}')")
                 #     sleep(0.5)
-                logger.info(f"Downloading: {i.text}")
-                i.click()
+                logger.info(
+                    f"Downloading: {i.text} - href: {i.get_attribute('href')} - \
+                    data-href: {i.get_attribute('data-href')}"
+                )
+                if i.get_attribute("href").__contains__("javascript"):
+                    i.click()
+                    # driver.execute_script(
+                    #    f"window.open('{i.get_attribute('data-href')}')"
+                    # )
+                else:
+                    driver.execute_script(f"window.open('{i.get_attribute('href')}')")
                 sleep(0.5)
 
-        wait_for_downloads(file_path)
-        progressbar.stop()
+            files = os.listdir(file_path)
+            wait.until(lambda d: any(f.endswith(".pdf") for f in files))  # noqa: B023
 
     except Exception as e:
         logger.error(f"{e}")
-        progressbar.stop()
 
     finally:
-        delay_secs = 4
-        alarm = threading.Timer(delay_secs, watchdog)
+        wait_for_downloads(file_path)
+        progressbar.stop()
+        alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()
         # Closes the browser
         driver.quit()
@@ -357,13 +369,14 @@ if __name__ == "__main__":
         download_docs(
             [
                 {"desc": "Merch functional docs", "doc_id": "1585843.1"},
-                {"desc": "Extensions docs", "doc_id": "2978473.1"},
-                {"desc": "Rics func docs", "doc_id": "2643542.1"},
-                {"desc": "RDS func docs", "doc_id": "2899701.1"},
-                {"desc": "RDS func docs", "doc_id": "2899701.1"},
-                {"desc": "POM func docs", "doc_id": "2815461.1"},
-                {"desc": "Locatization func docs", "doc_id": "2534504.2"},
-                {"desc": "blueprint func docs", "doc_id": "2677553.1"},
+                {"desc": "Extensions docs--", "doc_id": "2978473.1"},
+                # {"desc": "Rics func docs", "doc_id": "2643542.1"},
+                # {"desc": "RDS func docs", "doc_id": "2899701.1"},
+                # {"desc": "RDS func docs", "doc_id": "2899701.1"},
+                # {"desc": "POM func docs", "doc_id": "2815461.1"},
+                # {"desc": "Locatization func docs (KA903) refactor",
+                #  "doc_id": "2534504.2"},
+                # {"desc": "blueprint func docs", "doc_id": "2677553.1"},
             ],
             driver,
         )
