@@ -25,10 +25,6 @@
             "doc_id": "2815461.1"
         },
         {
-            "desc": "Locatization func docs",
-            "doc_id": "2534504.2"
-        },
-        {
             "desc": "blueprint func docs",
             "doc_id": "2677553.1"
         },
@@ -39,6 +35,10 @@
         {
             "desc": "Advanced Release Notes",
             "doc_id": "2704051.1"
+        },
+        {
+            "desc": "Xstore Supplemental Documentation Library",
+            "doc_id": "1994467.1"
         }
     ],
     "noauth_req": [
@@ -68,7 +68,45 @@
         },
         {
             "desc": "aif_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/ai-foundation-cloud-service/25.2.301.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/ai-foundation-cloud-service/25.2.401.0/books.html"
+        },
+        {
+            "desc": "ri_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-insights-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "ri_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-insights-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "ap_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-assortment-planning-cloud-service/25.2.401.0/books.html"
+        },
+        {
+            "desc": "ap_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-inventory-planning-optimization-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "ipo_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-inventory-planning-optimization-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "lpo_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-lifecycle-pricing-optimization-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "mfp_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/merchandise-financial-planning-cloud/25.2.401.0/books.html"
+        },
+        {
+            "desc": "rpas_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-predictive-application-server-cloud-edition/25.2.401.0/books.html"
+        }
+    ],
+    "removed": [
+        {
+            "desc": "Locatization func docs (KA903) refactor",
+            "doc_id": "2534504.2"
         }
     ]
 }
