@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import glob
 import os
+import shutil
 import threading
 from time import sleep, time
 
@@ -25,9 +26,12 @@ load_dotenv()
 
 driver: webdriver = None
 
-# Set the download path
-file_path = os.path.join(os.getcwd(), "func_docs")
-os.makedirs(file_path, exist_ok=True)
+# Persistent base folder — always exists, never deleted
+_base_path = os.path.join(os.getcwd(), "func_docs")
+os.makedirs(_base_path, exist_ok=True)
+
+# Working download folder — set at download time
+file_path = os.path.join(os.getcwd(), "func_docs_work")
 
 
 def watchdog():
@@ -227,6 +231,11 @@ def open_driver(headed: bool = False) -> webdriver:
 
 
 def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
+    # Reset work folder for a clean download
+    if os.path.isdir(file_path):
+        shutil.rmtree(file_path)
+    os.makedirs(file_path, exist_ok=True)
+
     base_url = "https://support.oracle.com/support/?kmContentId="
     try:
         if driver is None:

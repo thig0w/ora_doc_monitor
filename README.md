@@ -40,14 +40,14 @@ python -m source.cli --headed
 python -m source.cli --download
 ```
 
-> **Note:** The diff step requires a previous run to exist. On the first run, no `*_old/` folders are present, so the diff output will be empty.
-
 ## How It Works
 
-1. **Download** — Fetches PDFs in parallel from two source types:
-   - **MOS (authenticated):** Uses Selenium to log into Oracle Support with 2FA, then downloads PDFs attached to knowledge articles.
-   - **Public docs:** Scrapes PDF links from public `docs.oracle.com` pages and downloads them via HTTP.
-2. **Diff** — Compares the newly downloaded files against the previous run's files and copies changed documents to a timestamped folder (`df_YYYYMMDDHHMM/`), with a Rich-formatted summary table.
+1. **Download** — Fetches PDFs in parallel from two source types into temporary `_work` folders:
+   - **MOS (authenticated):** Uses Selenium to log into Oracle Support with 2FA, then downloads PDFs attached to knowledge articles into `func_docs_work/`.
+   - **Public docs:** Scrapes PDF links from public `docs.oracle.com` pages and downloads them via HTTP into `<name>_work/`.
+2. **Checksum** — Generates an MD5 checksum file (`<name>_md5.txt`) for the contents of each work folder.
+3. **Diff** — Compares each work folder against the corresponding persistent base folder and copies changed documents to a timestamped folder (`df_YYYYMMDDHHMM/`), with a Rich-formatted summary table.
+4. **Sync** — Copies the work folder contents into the base folder and removes the work folder.
 
 Sources are configured in `source/doc_sources.json`.
 
@@ -55,10 +55,15 @@ Sources are configured in `source/doc_sources.json`.
 
 | Path | Description |
 |---|---|
-| `func_docs/` | Downloaded MOS PDFs (current run) |
-| `func_docs_old/` | MOS PDFs from previous run (used for diff) |
-| `<name>_docs/` | Downloaded public PDFs per source |
-| `df_YYYYMMDDHHMM/` | Diff output: `*_new.*` and `*_old.*` pairs for changed files |
+| `func_docs/` | Persistent MOS PDF baseline — updated after each run |
+| `<name>_docs/` | Persistent public PDF baseline per source — updated after each run |
+| `func_docs_work/` | Temporary download target for MOS docs — deleted after sync |
+| `<name>_work/` | Temporary download target per public source — deleted after sync |
+| `func_docs_md5.txt` | MD5 checksums of the latest MOS download |
+| `<name>_md5.txt` | MD5 checksums of the latest public source download |
+| `df_YYYYMMDDHHMM/` | Diff output: `*_new.*` and `*_old.*` pairs for changed files (only created when differences are detected) |
+
+> **Note:** On the first run, base folders are empty, so all downloaded files will appear as new (`LEFT`) in the diff output.
 
 ## Development
 
