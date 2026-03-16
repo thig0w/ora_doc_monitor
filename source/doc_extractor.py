@@ -104,7 +104,7 @@ def open_driver(headed: bool = False) -> webdriver:
 
     if mos_user is None or mos_pass is None:
         logger.error("Please set MOSUSER and MOSPASS environment variables!")
-        return False
+        return None
 
     try:
         driver = webdriver.Firefox(options=firefox_options)
