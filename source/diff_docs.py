@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import filecmp
+import hashlib
 import os
 import shutil
 from datetime import datetime
@@ -8,6 +9,21 @@ from interface import logger, progressbar
 from rich.table import Table
 
 now = datetime.now()
+
+
+def generate_checksums(folder_path: str, output_file: str):
+    entries = []
+    for fname in sorted(os.listdir(folder_path)):
+        fpath = os.path.join(folder_path, fname)
+        if os.path.isfile(fpath):
+            md5 = hashlib.md5()
+            with open(fpath, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    md5.update(chunk)
+            entries.append(f"{md5.hexdigest()}  {fname}\n")
+    with open(output_file, "w") as f:
+        f.writelines(entries)
+    logger.info(f"Checksums written to {output_file}")
 
 
 def create_version_folder(folder_name: str = ""):
@@ -41,15 +57,27 @@ def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     for diff in clean_table:
         table.add_row(*diff)
 
-    # console.print(table)
     return table
 
 
-def comp_folders(dir1, dir2, desc: str = ""):
-    logger.info(f"Comparing folders: {dir1} and {dir2}")
-    if len(os.listdir(dir1)) == 0:
-        logger.info(f"No files found in {dir1}")
+def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
+    logger.info(f"Comparing folders: {work_dir} and {base_dir}")
+
+    if not os.path.isdir(work_dir):
+        logger.info(f"Work folder not found, skipping: {work_dir}")
         return
+
+    if len(os.listdir(work_dir)) == 0:
+        logger.info(f"No files found in {work_dir}")
+        return
+
+    # Ensure base exists before comparison
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Generate checksums for the freshly downloaded work folder
+    checksum_file = os.path.join(os.getcwd(), f"{os.path.basename(base_dir)}_md5.txt")
+    generate_checksums(work_dir, checksum_file)
+
     logger.info(f"Starting diff report for {desc}...")
     diff_tab: list[tuple[str, str, str]] = []
 
@@ -59,7 +87,7 @@ def comp_folders(dir1, dir2, desc: str = ""):
     )
     progressbar.start()
 
-    dcmp = filecmp.dircmp(dir1, dir2)
+    dcmp = filecmp.dircmp(work_dir, base_dir)
 
     for name in dcmp.diff_files:
         logger.info(f"DIFF file: {name} found in {dcmp.left} and {dcmp.right}")
@@ -70,10 +98,6 @@ def comp_folders(dir1, dir2, desc: str = ""):
     for name in dcmp.right_only:
         logger.info(f"ONLY RIGHT file: {name} found in {dcmp.right}")
         diff_tab.append(("[red]RIGHT", "", f"{dcmp.right}/{name}"))
-    ## This process does not intend to generate subfolders. So no need to compare
-    # for sub_dcmp in dcmp.subdirs.values():
-    #     sub_diff_tab = report_recursive_diff(sub_dcmp)
-    #     diff_tab.extend(sub_diff_tab)
 
     if len(diff_tab) > 0:
         table = draw_result_table(diff_tab, desc)
@@ -83,19 +107,29 @@ def comp_folders(dir1, dir2, desc: str = ""):
     progressbar.stop_task(diff_task)
     progressbar.stop()
 
+    # Sync work → base (work is the authoritative new state)
+    for fname in os.listdir(work_dir):
+        src = os.path.join(work_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(base_dir, fname))
+
+    # Clean up disposable work folder
+    shutil.rmtree(work_dir)
+    logger.info(f"Synced {work_dir} -> {base_dir} and removed work folder")
+
 
 def diff_all_folders(noauth_source: list[dict[str, str]]):
     # TODO: Thread this
     comp_folders(
+        os.path.join(os.getcwd(), "func_docs_work"),
         os.path.join(os.getcwd(), "func_docs"),
-        os.path.join(os.getcwd(), "func_docs_old"),
         "func_docs",
     )
 
     for i in noauth_source:
         comp_folders(
+            os.path.join(os.getcwd(), f"{i['desc']}_work"),
             os.path.join(os.getcwd(), f"{i['desc']}"),
-            os.path.join(os.getcwd(), f"{i['desc']}_old"),
             f"{i['desc']}",
         )
 
@@ -131,11 +165,3 @@ if __name__ == "__main__":
     }
 
     diff_all_folders(doc_sources["noauth_req"])
-
-    # comp_folders(
-    #     os.path.join(os.getcwd(), "../func_docs"),
-    #     os.path.join(os.getcwd(), "../func_docs_old"),
-    #     "func_docs",
-    # )
-    # draw_result_table([("left","file1","file2"),
-    #                    ("right","","file4")])
