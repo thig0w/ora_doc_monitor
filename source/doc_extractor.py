@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import glob
 import os
 import shutil
@@ -10,7 +9,7 @@ from dotenv import load_dotenv
 from interface import logger, progressbar
 from pyotp import TOTP
 from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.options import Options
@@ -140,8 +139,12 @@ def open_driver(headed: bool = False) -> webdriver:
 
         # 2. JET subtree visible
         wait.until(
-            lambda d: "oj-complete"
-            in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute("class")
+            lambda d: (
+                "oj-complete"
+                in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute(
+                    "class"
+                )
+            )
         )
 
         sign_in_button = wait.until(
@@ -217,8 +220,12 @@ def open_driver(headed: bool = False) -> webdriver:
 
         # 2. JET subtree visible
         wait.until(
-            lambda d: "oj-complete"
-            in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute("class")
+            lambda d: (
+                "oj-complete"
+                in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute(
+                    "class"
+                )
+            )
         )
 
         return driver
@@ -242,54 +249,63 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
             driver = open_driver()
 
         for source in sources:
-            driver.get(base_url + source["doc_id"].split(".")[0])
+            try:
+                driver.get(base_url + source["doc_id"].split(".")[0])
 
-            # Wait page load
-            logger.debug("Waiting first element to load...")
-            # Setting Driver Wait
-            wait = WebDriverWait(driver, 60)
+                # Wait page load
+                logger.debug("Waiting first element to load...")
+                # Setting Driver Wait
+                wait = WebDriverWait(driver, 60)
 
-            href_links = execute_with_retry(
-                lambda: load_page_and_collect_links(
-                    wait,  # noqa: B023
-                    source["doc_id"],  # noqa: B023
-                ),
-                retries=3,
-            )
-
-            logger.debug("Start downloading...")
-
-            # TODO: Remove
-            # href_links = href_links[:10]
-
-            progressbar.start()
-
-            for i in progressbar.track(
-                href_links,
-                description=f"Downloading files from docid {source['doc_id']}",
-            ):
-                # if not i.__contains__("javascript:;"):
-                #     logger.info(f"Downloading: {i}")
-                #     driver.execute_script(f"window.open('{i}')")
-                #     sleep(0.5)
-                logger.info(
-                    f"Downloading: {i.text} - href: {i.get_attribute('href')} - \
-                    data-href: {i.get_attribute('data-href')}"
+                href_links = execute_with_retry(
+                    lambda: load_page_and_collect_links(
+                        wait,  # noqa: B023
+                        source["doc_id"],  # noqa: B023
+                    ),
+                    retries=3,
                 )
-                if i.get_attribute("href").__contains__("javascript"):
-                    i.click()
-                    # driver.execute_script(
-                    #    f"window.open('{i.get_attribute('data-href')}')"
-                    # )
-                else:
-                    driver.execute_script(f"window.open('{i.get_attribute('href')}')")
-                sleep(0.5)
 
-            files = os.listdir(file_path)
-            wait.until(lambda d: any(f.endswith(".pdf") for f in files))  # noqa: B023
+                logger.debug("Start downloading...")
+
+                # TODO: Remove
+                # href_links = href_links[:10]
+
+                progressbar.start()
+
+                for i in progressbar.track(
+                    href_links,
+                    description=f"Downloading files from docid {source['doc_id']}",
+                ):
+                    # if not i.__contains__("javascript:;"):
+                    #     logger.info(f"Downloading: {i}")
+                    #     driver.execute_script(f"window.open('{i}')")
+                    #     sleep(0.5)
+                    logger.info(
+                        f"Downloading: {i.text} - href: {i.get_attribute('href')} - \
+                    data-href: {i.get_attribute('data-href')}"
+                    )
+                    if i.get_attribute("href").__contains__("javascript"):
+                        i.click()
+                        # driver.execute_script(
+                        #    f"window.open('{i.get_attribute('data-href')}')"
+                        # )
+                    else:
+                        driver.execute_script(
+                            f"window.open('{i.get_attribute('href')}')"
+                        )
+                    sleep(0.5)
+
+                files = os.listdir(file_path)
+                wait.until(lambda d: any(f.endswith(".pdf") for f in files))  # noqa: B023
+
+            except TimeoutException as e:
+                logger.error(
+                    f"TimeoutException for source {source['doc_id']}: {e!r} — skipping"
+                )
+                continue
 
     except Exception as e:
-        logger.error(f"{e}")
+        logger.exception(f"{type(e).__name__}: {e!r}")
 
     finally:
         wait_for_downloads(file_path)
@@ -322,8 +338,10 @@ def load_page_and_collect_links(wait, source):
 
     # 2. JET subtree visible
     wait.until(
-        lambda d: "oj-complete"
-        in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute("class")
+        lambda d: (
+            "oj-complete"
+            in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute("class")
+        )
     )
 
     # 3. Links are ready

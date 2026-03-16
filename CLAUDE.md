@@ -56,16 +56,16 @@ All source code lives in `source/`:
 - **`cli.py`** — Click-based entry point. Spawns two threads (auth docs + public docs) in parallel, then runs diff.
 - **`doc_extractor.py`** — Selenium/Firefox automation: logs into MOS with TOTP 2FA, downloads PDFs. Includes retry logic (`execute_with_retry`) and a `watchdog()` to force-kill frozen Firefox processes.
 - **`url_extractor.py`** — Downloads PDFs from public Oracle documentation pages by scraping HTML links with BeautifulSoup.
-- **`diff_docs.py`** — Compares old vs. new download folders using `filecmp.dircmp`, copies diffs to `df_YYYYMMDDHHMM/`, and renders a Rich table (DIFF / LEFT / RIGHT).
+- **`diff_docs.py`** — Compares work vs. base folders by MD5 hash (not filename), copies diffs to `df_YYYYMMDDHHMM/`, and renders a Rich table (LEFT = new, RIGHT = removed). Renamed-but-unchanged files are ignored. Syncs base folder by removing/moving only changed files, then stores `checksums.md5` in the base folder for the next run.
 - **`interface.py`** — Shared `logger` (loguru + Rich handler), `progressbar` (Rich Progress), and `console` (Rich Console) used across all modules.
 - **`doc_sources.json`** — Configuration listing all documentation sources: `auth_req` (MOS doc IDs) and `noauth_req` (public URLs with folder names).
 
 ### Download Output Structure
 
-- `func_docs/` — MOS authenticated docs (current)
-- `func_docs_old/` — MOS authenticated docs (previous, for diffing)
-- `<name>_docs/` / `<name>_docs_old/` — Public doc folders per source
-- `df_YYYYMMDDHHMM/` — Diff output: `*_new.*` and `*_old.*` pairs
+- `func_docs/` — MOS authenticated docs baseline (persistent); includes `checksums.md5`
+- `<name>_docs/` — Public doc baseline per source (persistent); includes `checksums.md5`
+- `func_docs_work/` / `<name>_work/` — Temporary download targets; deleted after sync
+- `df_YYYYMMDDHHMM/` — Diff output: `*_new.*` and `*_old.*` pairs (only created when differences are detected)
 
 ### Key Design Patterns
 
