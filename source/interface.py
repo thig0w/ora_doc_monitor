@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # TODO: refactor to generate a package and hanlde logs and
 #       the console into the init file.... :(
 import os

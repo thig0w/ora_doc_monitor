@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 import os
+import shutil
 from time import sleep
 from urllib.parse import urljoin
 
@@ -16,8 +16,14 @@ headers = {
 def download_pdfs(sources: list[dict[str, str]]):
     progressbar.start()
     for source in progressbar.track(sources, description="Sources"):
-        # makes a foler to download files
-        output_dir = os.path.join(os.getcwd(), source["desc"])
+        # Ensure persistent base folder exists
+        base_dir = os.path.join(os.getcwd(), source["desc"])
+        os.makedirs(base_dir, exist_ok=True)
+
+        # Reset work folder for a clean download
+        output_dir = os.path.join(os.getcwd(), f"{source['desc']}_work")
+        if os.path.isdir(output_dir):
+            shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         try:
             response = requests.get(source["doc_id"], headers=headers)

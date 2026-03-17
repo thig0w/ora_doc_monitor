@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-import filecmp
+import hashlib
 import os
 import shutil
 from datetime import datetime
@@ -8,6 +7,37 @@ from interface import logger, progressbar
 from rich.table import Table
 
 now = datetime.now()
+
+
+def generate_checksums(folder_path: str, output_file: str):
+    entries = []
+    for fname in sorted(os.listdir(folder_path)):
+        if fname == "checksums.md5":
+            continue
+        fpath = os.path.join(folder_path, fname)
+        if os.path.isfile(fpath):
+            md5 = hashlib.md5()
+            with open(fpath, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    md5.update(chunk)
+            entries.append(f"{md5.hexdigest()}  {fname}\n")
+    with open(output_file, "w") as f:
+        f.writelines(entries)
+    logger.info(f"Checksums written to {output_file}")
+
+
+def parse_checksums(checksum_file: str) -> dict[str, str]:
+    result = {}
+    if not os.path.isfile(checksum_file):
+        return result
+    with open(checksum_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                parts = line.split("  ", 1)
+                if len(parts) == 2:
+                    result[parts[0]] = parts[1]
+    return result
 
 
 def create_version_folder(folder_name: str = ""):
@@ -41,15 +71,34 @@ def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     for diff in clean_table:
         table.add_row(*diff)
 
-    # console.print(table)
     return table
 
 
-def comp_folders(dir1, dir2, desc: str = ""):
-    logger.info(f"Comparing folders: {dir1} and {dir2}")
-    if len(os.listdir(dir1)) == 0:
-        logger.info(f"No files found in {dir1}")
+def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
+    logger.info(f"Comparing folders: {work_dir} and {base_dir}")
+
+    if not os.path.isdir(work_dir):
+        logger.info(f"Work folder not found, skipping: {work_dir}")
         return
+
+    if len(os.listdir(work_dir)) == 0:
+        logger.info(f"No files found in {work_dir}")
+        return
+
+    # Ensure base exists before comparison
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Generate checksums for the freshly downloaded work folder
+    work_checksum_file = os.path.join(work_dir, "checksums.md5")
+    generate_checksums(work_dir, work_checksum_file)
+
+    # Load and compare hash sets
+    work_hashes = parse_checksums(work_checksum_file)
+    base_checksum_file = os.path.join(base_dir, "checksums.md5")
+    if not os.path.isfile(base_checksum_file):
+        generate_checksums(base_dir, base_checksum_file)
+    base_hashes = parse_checksums(base_checksum_file)
+
     logger.info(f"Starting diff report for {desc}...")
     diff_tab: list[tuple[str, str, str]] = []
 
@@ -59,21 +108,15 @@ def comp_folders(dir1, dir2, desc: str = ""):
     )
     progressbar.start()
 
-    dcmp = filecmp.dircmp(dir1, dir2)
+    for hash_, fname in work_hashes.items():
+        if hash_ not in base_hashes:
+            logger.info(f"NEW file: {fname} in {work_dir}")
+            diff_tab.append(("[green]LEFT", os.path.join(work_dir, fname), ""))
 
-    for name in dcmp.diff_files:
-        logger.info(f"DIFF file: {name} found in {dcmp.left} and {dcmp.right}")
-        diff_tab.append(("[cyan]DIFF", f"{dcmp.left}/{name}", f"{dcmp.right}/{name}"))
-    for name in dcmp.left_only:
-        logger.info(f"ONLY LEFT file: {name} found in {dcmp.left}")
-        diff_tab.append(("[green]LEFT", f"{dcmp.left}/{name}", ""))
-    for name in dcmp.right_only:
-        logger.info(f"ONLY RIGHT file: {name} found in {dcmp.right}")
-        diff_tab.append(("[red]RIGHT", "", f"{dcmp.right}/{name}"))
-    ## This process does not intend to generate subfolders. So no need to compare
-    # for sub_dcmp in dcmp.subdirs.values():
-    #     sub_diff_tab = report_recursive_diff(sub_dcmp)
-    #     diff_tab.extend(sub_diff_tab)
+    for hash_, fname in base_hashes.items():
+        if hash_ not in work_hashes:
+            logger.info(f"REMOVED file: {fname} in {base_dir}")
+            diff_tab.append(("[red]RIGHT", "", os.path.join(base_dir, fname)))
 
     if len(diff_tab) > 0:
         table = draw_result_table(diff_tab, desc)
@@ -83,19 +126,38 @@ def comp_folders(dir1, dir2, desc: str = ""):
     progressbar.stop_task(diff_task)
     progressbar.stop()
 
+    # Remove old files from base (hashes only in base, not in work)
+    for hash_, fname in base_hashes.items():
+        if hash_ not in work_hashes:
+            os.remove(os.path.join(base_dir, fname))
+            logger.info(f"Removed old file from base: {fname}")
+
+    # Move new files from work to base (hashes only in work, not in base)
+    for hash_, fname in work_hashes.items():
+        if hash_ not in base_hashes:
+            shutil.move(os.path.join(work_dir, fname), os.path.join(base_dir, fname))
+            logger.info(f"Moved new file to base: {fname}")
+
+    # Move checksums.md5 from work to base
+    shutil.move(work_checksum_file, os.path.join(base_dir, "checksums.md5"))
+
+    # Clean up disposable work folder
+    shutil.rmtree(work_dir)
+    logger.info(f"Synced {work_dir} -> {base_dir} and removed work folder")
+
 
 def diff_all_folders(noauth_source: list[dict[str, str]]):
     # TODO: Thread this
     comp_folders(
+        os.path.join(os.getcwd(), "func_docs_work"),
         os.path.join(os.getcwd(), "func_docs"),
-        os.path.join(os.getcwd(), "func_docs_old"),
         "func_docs",
     )
 
     for i in noauth_source:
         comp_folders(
+            os.path.join(os.getcwd(), f"{i['desc']}_work"),
             os.path.join(os.getcwd(), f"{i['desc']}"),
-            os.path.join(os.getcwd(), f"{i['desc']}_old"),
             f"{i['desc']}",
         )
 
@@ -131,11 +193,3 @@ if __name__ == "__main__":
     }
 
     diff_all_folders(doc_sources["noauth_req"])
-
-    # comp_folders(
-    #     os.path.join(os.getcwd(), "../func_docs"),
-    #     os.path.join(os.getcwd(), "../func_docs_old"),
-    #     "func_docs",
-    # )
-    # draw_result_table([("left","file1","file2"),
-    #                    ("right","","file4")])
