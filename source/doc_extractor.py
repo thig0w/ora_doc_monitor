@@ -23,8 +23,6 @@ class NoValidLinksFound(Exception):
 
 load_dotenv()
 
-driver: webdriver = None
-
 # Persistent base folder — always exists, never deleted
 _base_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(_base_path, exist_ok=True)
@@ -232,7 +230,10 @@ def open_driver(headed: bool = False) -> webdriver:
     except Exception as e:
         logger.error(f"Error trying to Open webdriver and login: {e}")
     else:
+        profile_dir = driver.capabilities.get("moz:profile")
         driver.quit()
+        if profile_dir and os.path.isdir(profile_dir):
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
     return None
 
@@ -312,8 +313,12 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
         progressbar.stop()
         alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()
-        # Closes the browser
-        driver.quit()
+        if driver is not None:
+            profile_dir = driver.capabilities.get("moz:profile")
+            driver.quit()
+            if profile_dir and os.path.isdir(profile_dir):
+                shutil.rmtree(profile_dir, ignore_errors=True)
+                logger.debug(f"Removed Firefox temp profile: {profile_dir}")
         alarm.cancel()
 
 
