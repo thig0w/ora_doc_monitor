@@ -50,7 +50,7 @@ def count_files_with_extension(folder_path, extension):
 
 
 # Wait downloads to finish
-def wait_for_downloads(directory, timeout=3600, poll_interval=1):
+def wait_for_downloads(directory, timeout=10800, poll_interval=15):
     total = count_files_with_extension(directory, ".part")
 
     wait_bar = progressbar.add_task(
@@ -238,7 +238,9 @@ def open_driver(headed: bool = False) -> webdriver:
     return None
 
 
-def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
+def download_docs(
+    sources: list[dict[str, str]], driver: webdriver = None, result: list | None = None
+):
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
         shutil.rmtree(file_path)
@@ -309,7 +311,12 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
         logger.exception(f"{type(e).__name__}: {e!r}")
 
     finally:
-        wait_for_downloads(file_path)
+        try:
+            wait_for_downloads(file_path)
+        except TimeoutError as e:
+            logger.error(f"Download wait timed out: {e}")
+            if result is not None:
+                result[0] = False
         progressbar.stop()
         alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()

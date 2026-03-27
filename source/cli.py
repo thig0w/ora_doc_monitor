@@ -32,12 +32,13 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
     doc_sources = read_json()
 
     # infos that need auth
+    auth_result = [True]
     if auth_docs or is_both:
         driver = open_driver(headed=headed)
         if driver is None:
             sys.exit(1)
         thread_docs_auth = threading.Thread(
-            target=download_docs, args=(doc_sources["auth_req"], driver)
+            target=download_docs, args=(doc_sources["auth_req"], driver, auth_result)
         )
         thread_docs_auth.start()
 
@@ -53,7 +54,7 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
     if no_auth_docs or is_both:
         thread_docs_noauth.join()
 
-    if not download:
+    if not download and auth_result[0]:
         diff_all_folders(doc_sources["noauth_req"])
 
 
