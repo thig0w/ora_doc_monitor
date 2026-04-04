@@ -54,11 +54,11 @@ LOG_LVL=<DEBUG|INFO|WARNING|ERROR>  # optional, default: ERROR
 All source code lives in `source/`:
 
 - **`cli.py`** — Click-based entry point. Spawns two threads (auth docs + public docs) in parallel. Each thread runs its own download then immediately triggers its own diff — auth and noauth diffs are fully decoupled and run as soon as their respective downloads finish.
-- **`doc_extractor.py`** — Selenium/Firefox automation: logs into MOS with TOTP 2FA, downloads PDFs. Includes retry logic (`execute_with_retry`) and a `watchdog()` to force-kill frozen Firefox processes.
+- **`doc_extractor.py`** — Selenium/Firefox automation: logs into MOS with TOTP 2FA, downloads PDFs. Includes retry logic (`execute_with_retry`) and a `watchdog()` to force-kill frozen Firefox processes. `load_page_and_collect_links()` returns `list[dict]` (keys: `href`, `data_href`, `text`) — attributes are extracted atomically via a single JS call to avoid `StaleElementReferenceException` from Oracle JET re-renders. `execute_with_retry` retries on both `NoValidLinksFound` and `StaleElementReferenceException`.
 - **`url_extractor.py`** — Downloads PDFs from public Oracle documentation pages by scraping HTML links with BeautifulSoup.
 - **`diff_docs.py`** — Compares work vs. base folders by MD5 hash (not filename), copies diffs to `df_YYYYMMDDHHMM/`, and renders a Rich table (LEFT = new, RIGHT = removed). Renamed-but-unchanged files are ignored. Syncs base folder by removing/moving only changed files, then stores `000_checksumfile.md` in the base folder for the next run. Exposes `diff_auth_folders()` and `diff_noauth_folders()` as separate entry points.
 - **`interface.py`** — Shared `logger` (loguru + Rich handler), `progressbar` (Rich Progress), and `console` (Rich Console) used across all modules.
-- **`doc_sources.json`** — Configuration listing all documentation sources: `auth_req` (MOS doc IDs) and `noauth_req` (public URLs with folder names).
+- **`doc_sources.json`** — Configuration listing all documentation sources: `auth_req` (MOS doc IDs requiring login) and `noauth_req` (public URLs with folder names). "Xstore Supplemental Documentation Library" is in `noauth_req`.
 
 ### Download Output Structure
 
@@ -69,6 +69,7 @@ All source code lives in `source/`:
 
 ### Key Design Patterns
 
-- **Oracle JET detection:** `doc_extractor.py` waits for Oracle's JavaScript framework to finish rendering before interacting with pages.
+- **Oracle JET detection:** `doc_extractor.py` waits for Oracle's JavaScript framework to finish rendering before interacting with pages. Downloadable file links are identified by CSS selector `a[data-oce-meta-data], a[data-ucm-meta-data]` — two attribute types are used by MOS depending on the asset backend (OCM vs UCM).
+- **Stale element avoidance:** After finding link elements, all attributes (`href`, `data-href`, text) are extracted in a single `execute_script` call before Oracle JET can re-render the DOM. The download loop works with plain dicts. For `javascript:` links (Oracle JET session-authenticated downloads), the element is re-found fresh by index immediately before each `.click()` — `window.open(data_href)` cannot be used here because the download token is only issued through the JET click handler.
 - **Firefox PDF auto-save:** WebDriver preferences configure Firefox to auto-download PDFs without dialogs.
 - **No test suite** currently exists in this project.

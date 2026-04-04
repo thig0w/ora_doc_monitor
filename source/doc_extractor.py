@@ -264,38 +264,40 @@ def download_docs(
                     lambda: load_page_and_collect_links(
                         wait,  # noqa: B023
                         source["doc_id"],  # noqa: B023
+                        driver,  # noqa: B023
                     ),
                     retries=3,
                 )
 
                 logger.debug("Start downloading...")
 
-                # TODO: Remove
-                # href_links = href_links[:10]
-
                 progressbar.start()
 
-                for i in progressbar.track(
-                    href_links,
-                    description=f"Downloading files from docid {source['doc_id']}",
-                ):
-                    # if not i.__contains__("javascript:;"):
-                    #     logger.info(f"Downloading: {i}")
-                    #     driver.execute_script(f"window.open('{i}')")
-                    #     sleep(0.5)
-                    logger.info(
-                        f"Downloading: {i.text} - href: {i.get_attribute('href')} - \
-                    data-href: {i.get_attribute('data-href')}"
+                for idx, i in enumerate(
+                    progressbar.track(
+                        href_links,
+                        description=f"Downloading files from docid {source['doc_id']}",
                     )
-                    if i.get_attribute("href").__contains__("javascript"):
-                        i.click()
-                        # driver.execute_script(
-                        #    f"window.open('{i.get_attribute('data-href')}')"
-                        # )
-                    else:
-                        driver.execute_script(
-                            f"window.open('{i.get_attribute('href')}')"
+                ):
+                    href = i.get("href", "") or ""
+                    data_href = i.get("data_href", "") or ""
+                    text = i.get("text", "")
+                    logger.info(
+                        f"Downloading: {text} - href: {href} - data-href: {data_href}"
+                    )
+                    if "javascript" in href:
+                        # Re-find element fresh immediately before click to avoid
+                        # stale reference.
+                        # The download token is session-tied and only triggered via
+                        # the JET click handler.
+                        fresh = driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "a[data-oce-meta-data], a[data-ucm-meta-data]",
                         )
+                        if idx < len(fresh):
+                            fresh[idx].click()
+                    else:
+                        driver.execute_script(f"window.open('{href}')")
                     sleep(0.5)
 
                 files = os.listdir(file_path)
@@ -329,7 +331,7 @@ def download_docs(
         alarm.cancel()
 
 
-def load_page_and_collect_links(wait, source):
+def load_page_and_collect_links(wait, source, driver):
     wait.until(
         ec.visibility_of_element_located(
             (By.CLASS_NAME, "oj-sp-item-overview-page-main-strip")
@@ -365,23 +367,34 @@ def load_page_and_collect_links(wait, source):
         )
     )
 
-    href_links = [link.get_attribute("href") for link in elems]
-    valid_links = [h for h in href_links if h is not None]
+    # Extract all attributes atomically in one JS call before DOM can re-render
+    link_data = driver.execute_script(
+        """
+        var elems = arguments[0];
+        return Array.from(elems).map(function(el) {
+            return {
+                href: el.getAttribute('href'),
+                data_href: el.getAttribute('data-href'),
+                text: el.textContent.trim()
+            };
+        });
+    """,
+        elems,
+    )
+
+    valid_links = [d for d in link_data if d.get("href")]
 
     if not valid_links:
         raise NoValidLinksFound(f"No links found for {source}")
 
-    # TODO: Check if we can use the new metadata to avoid downloading same data
-    print(href_links)
-
-    return elems
+    return link_data
 
 
 def execute_with_retry(func, retries=3):
     for retry in range(1, retries + 1):
         try:
             return func()
-        except NoValidLinksFound as e:
+        except (NoValidLinksFound, StaleElementReferenceException) as e:
             if logger:
                 logger.warning(f"{e} — retrying ({retry}/{retries})")
             if retry == retries:
