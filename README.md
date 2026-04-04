@@ -21,6 +21,16 @@ LOG_LVL=ERROR   # optional: DEBUG | INFO | WARNING | ERROR
 
 `MOSMFAKEY` is the Base32 secret from your MOS two-factor authentication setup (the key used to generate TOTP codes).
 
+**1Password integration:** Any of the three secrets can be a 1Password reference instead of a plain value. If the value starts with `op://`, it is resolved at runtime via the `op` CLI:
+
+```env
+MOSUSER=op://vault/item/username
+MOSPASS=op://vault/item/password
+MOSMFAKEY=op://vault/item/totp-secret
+```
+
+Requires the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`) to be installed and authenticated.
+
 ## Usage
 
 ```bash

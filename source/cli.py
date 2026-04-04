@@ -23,7 +23,7 @@ def _noauth_download_and_diff(sources, run_diff):
 
 
 def read_json():
-    logger.info("Reading json file")
+    logger.debug("Reading json file")
     file_path = os.path.join(os.path.dirname(__file__), "doc_sources.json")
     with open(file_path) as f:
         return json.load(f)

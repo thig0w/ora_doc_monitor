@@ -50,12 +50,12 @@ def download_pdfs(sources: list[dict[str, str]]):
                 filename = os.path.join(output_dir, pdf_url.split("/")[-1])
 
                 # Dowload the file
-                logger.info(f"Downloading: {pdf_url}")
+                logger.debug(f"Downloading: {pdf_url}")
                 try:
                     pdf_response = requests.get(pdf_url, headers=headers)
                     pdf_response.raise_for_status()
                 except Exception as e:
-                    logger.error(f"Error trying to download, re-queuing: {e}")
+                    logger.warning(f"Error trying to download, re-queuing: {e}")
                     if pdf_links.count(link) < 5:
                         pdf_links.append(link)
                     else:
