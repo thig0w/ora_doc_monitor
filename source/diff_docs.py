@@ -12,7 +12,7 @@ now = datetime.now()
 def generate_checksums(folder_path: str, output_file: str):
     entries = []
     for fname in sorted(os.listdir(folder_path)):
-        if fname == "checksums.md5":
+        if fname == "000_checksumfile.md":
             continue
         fpath = os.path.join(folder_path, fname)
         if os.path.isfile(fpath):
@@ -52,10 +52,16 @@ def copy_files(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     for file in diff_tab:
         if file[1] != "":
             root, extension = os.path.splitext(os.path.basename(file[1]))
-            shutil.copy(file[1], f"{diff_file_path}/{root}_new{extension}")
+            try:
+                shutil.copy(file[1], f"{diff_file_path}/{root}_new{extension}")
+            except FileNotFoundError:
+                logger.warning(f"File not found, skipping: {file[1]}")
         if file[2] != "":
             root, extension = os.path.splitext(os.path.basename(file[2]))
-            shutil.copy(file[2], f"{diff_file_path}/{root}_old{extension}")
+            try:
+                shutil.copy(file[2], f"{diff_file_path}/{root}_old{extension}")
+            except FileNotFoundError:
+                logger.warning(f"File not found, skipping: {file[2]}")
 
 
 def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
@@ -89,12 +95,12 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     os.makedirs(base_dir, exist_ok=True)
 
     # Generate checksums for the freshly downloaded work folder
-    work_checksum_file = os.path.join(work_dir, "checksums.md5")
+    work_checksum_file = os.path.join(work_dir, "000_checksumfile.md")
     generate_checksums(work_dir, work_checksum_file)
 
     # Load and compare hash sets
     work_hashes = parse_checksums(work_checksum_file)
-    base_checksum_file = os.path.join(base_dir, "checksums.md5")
+    base_checksum_file = os.path.join(base_dir, "000_checksumfile.md")
     if not os.path.isfile(base_checksum_file):
         generate_checksums(base_dir, base_checksum_file)
     base_hashes = parse_checksums(base_checksum_file)
@@ -129,8 +135,14 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     # Remove old files from base (hashes only in base, not in work)
     for hash_, fname in base_hashes.items():
         if hash_ not in work_hashes:
-            os.remove(os.path.join(base_dir, fname))
-            logger.info(f"Removed old file from base: {fname}")
+            base_file = os.path.join(base_dir, fname)
+            try:
+                os.remove(base_file)
+                logger.info(f"Removed old file from base: {fname}")
+            except FileNotFoundError:
+                logger.warning(
+                    f"File already absent from base, skipping remove: {fname}"
+                )
 
     # Move new files from work to base (hashes only in work, not in base)
     for hash_, fname in work_hashes.items():
@@ -138,22 +150,23 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
             shutil.move(os.path.join(work_dir, fname), os.path.join(base_dir, fname))
             logger.info(f"Moved new file to base: {fname}")
 
-    # Move checksums.md5 from work to base
-    shutil.move(work_checksum_file, os.path.join(base_dir, "checksums.md5"))
+    # Move 000_checksumfile.md from work to base
+    shutil.move(work_checksum_file, os.path.join(base_dir, "000_checksumfile.md"))
 
     # Clean up disposable work folder
     shutil.rmtree(work_dir)
     logger.info(f"Synced {work_dir} -> {base_dir} and removed work folder")
 
 
-def diff_all_folders(noauth_source: list[dict[str, str]]):
-    # TODO: Thread this
+def diff_auth_folders():
     comp_folders(
         os.path.join(os.getcwd(), "func_docs_work"),
         os.path.join(os.getcwd(), "func_docs"),
         "func_docs",
     )
 
+
+def diff_noauth_folders(noauth_source: list[dict[str, str]]):
     for i in noauth_source:
         comp_folders(
             os.path.join(os.getcwd(), f"{i['desc']}_work"),
@@ -192,4 +205,5 @@ if __name__ == "__main__":
         ]
     }
 
-    diff_all_folders(doc_sources["noauth_req"])
+    diff_auth_folders()
+    diff_noauth_folders(doc_sources["noauth_req"])

@@ -23,8 +23,6 @@ class NoValidLinksFound(Exception):
 
 load_dotenv()
 
-driver: webdriver = None
-
 # Persistent base folder — always exists, never deleted
 _base_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(_base_path, exist_ok=True)
@@ -52,7 +50,7 @@ def count_files_with_extension(folder_path, extension):
 
 
 # Wait downloads to finish
-def wait_for_downloads(directory, timeout=3600, poll_interval=1):
+def wait_for_downloads(directory, timeout=10800, poll_interval=15):
     total = count_files_with_extension(directory, ".part")
 
     wait_bar = progressbar.add_task(
@@ -232,12 +230,17 @@ def open_driver(headed: bool = False) -> webdriver:
     except Exception as e:
         logger.error(f"Error trying to Open webdriver and login: {e}")
     else:
+        profile_dir = driver.capabilities.get("moz:profile")
         driver.quit()
+        if profile_dir and os.path.isdir(profile_dir):
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
     return None
 
 
-def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
+def download_docs(
+    sources: list[dict[str, str]], driver: webdriver = None, result: list | None = None
+):
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
         shutil.rmtree(file_path)
@@ -261,38 +264,40 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
                     lambda: load_page_and_collect_links(
                         wait,  # noqa: B023
                         source["doc_id"],  # noqa: B023
+                        driver,  # noqa: B023
                     ),
                     retries=3,
                 )
 
                 logger.debug("Start downloading...")
 
-                # TODO: Remove
-                # href_links = href_links[:10]
-
                 progressbar.start()
 
-                for i in progressbar.track(
-                    href_links,
-                    description=f"Downloading files from docid {source['doc_id']}",
-                ):
-                    # if not i.__contains__("javascript:;"):
-                    #     logger.info(f"Downloading: {i}")
-                    #     driver.execute_script(f"window.open('{i}')")
-                    #     sleep(0.5)
-                    logger.info(
-                        f"Downloading: {i.text} - href: {i.get_attribute('href')} - \
-                    data-href: {i.get_attribute('data-href')}"
+                for idx, i in enumerate(
+                    progressbar.track(
+                        href_links,
+                        description=f"Downloading files from docid {source['doc_id']}",
                     )
-                    if i.get_attribute("href").__contains__("javascript"):
-                        i.click()
-                        # driver.execute_script(
-                        #    f"window.open('{i.get_attribute('data-href')}')"
-                        # )
-                    else:
-                        driver.execute_script(
-                            f"window.open('{i.get_attribute('href')}')"
+                ):
+                    href = i.get("href", "") or ""
+                    data_href = i.get("data_href", "") or ""
+                    text = i.get("text", "")
+                    logger.info(
+                        f"Downloading: {text} - href: {href} - data-href: {data_href}"
+                    )
+                    if "javascript" in href:
+                        # Re-find element fresh immediately before click to avoid
+                        # stale reference.
+                        # The download token is session-tied and only triggered via
+                        # the JET click handler.
+                        fresh = driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "a[data-oce-meta-data], a[data-ucm-meta-data]",
                         )
+                        if idx < len(fresh):
+                            fresh[idx].click()
+                    else:
+                        driver.execute_script(f"window.open('{href}')")
                     sleep(0.5)
 
                 files = os.listdir(file_path)
@@ -308,16 +313,25 @@ def download_docs(sources: list[dict[str, str]], driver: webdriver = None):
         logger.exception(f"{type(e).__name__}: {e!r}")
 
     finally:
-        wait_for_downloads(file_path)
+        try:
+            wait_for_downloads(file_path)
+        except TimeoutError as e:
+            logger.error(f"Download wait timed out: {e}")
+            if result is not None:
+                result[0] = False
         progressbar.stop()
         alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()
-        # Closes the browser
-        driver.quit()
+        if driver is not None:
+            profile_dir = driver.capabilities.get("moz:profile")
+            driver.quit()
+            if profile_dir and os.path.isdir(profile_dir):
+                shutil.rmtree(profile_dir, ignore_errors=True)
+                logger.debug(f"Removed Firefox temp profile: {profile_dir}")
         alarm.cancel()
 
 
-def load_page_and_collect_links(wait, source):
+def load_page_and_collect_links(wait, source, driver):
     wait.until(
         ec.visibility_of_element_located(
             (By.CLASS_NAME, "oj-sp-item-overview-page-main-strip")
@@ -347,27 +361,40 @@ def load_page_and_collect_links(wait, source):
     # 3. Links are ready
     elems = wait.until(
         lambda d: anchors_have_href(
-            d.find_elements(By.CSS_SELECTOR, "a[data-oce-meta-data]")
+            d.find_elements(
+                By.CSS_SELECTOR, "a[data-oce-meta-data], a[data-ucm-meta-data]"
+            )
         )
     )
 
-    href_links = [link.get_attribute("href") for link in elems]
-    valid_links = [h for h in href_links if h is not None]
+    # Extract all attributes atomically in one JS call before DOM can re-render
+    link_data = driver.execute_script(
+        """
+        var elems = arguments[0];
+        return Array.from(elems).map(function(el) {
+            return {
+                href: el.getAttribute('href'),
+                data_href: el.getAttribute('data-href'),
+                text: el.textContent.trim()
+            };
+        });
+    """,
+        elems,
+    )
+
+    valid_links = [d for d in link_data if d.get("href")]
 
     if not valid_links:
         raise NoValidLinksFound(f"No links found for {source}")
 
-    # TODO: Check if we can use the new metadata to avoid downloading same data
-    print(href_links)
-
-    return elems
+    return link_data
 
 
 def execute_with_retry(func, retries=3):
     for retry in range(1, retries + 1):
         try:
             return func()
-        except NoValidLinksFound as e:
+        except (NoValidLinksFound, StaleElementReferenceException) as e:
             if logger:
                 logger.warning(f"{e} — retrying ({retry}/{retries})")
             if retry == retries:

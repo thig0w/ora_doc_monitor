@@ -4,10 +4,22 @@ import sys
 import threading
 
 import click
-from diff_docs import diff_all_folders
+from diff_docs import diff_auth_folders, diff_noauth_folders
 from doc_extractor import download_docs, open_driver
 from interface import logger
 from url_extractor import download_pdfs
+
+
+def _auth_download_and_diff(sources, driver, auth_result, run_diff):
+    download_docs(sources, driver, auth_result)
+    if run_diff and auth_result[0]:
+        diff_auth_folders()
+
+
+def _noauth_download_and_diff(sources, run_diff):
+    download_pdfs(sources)
+    if run_diff:
+        diff_noauth_folders(sources)
 
 
 def read_json():
@@ -32,18 +44,21 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
     doc_sources = read_json()
 
     # infos that need auth
+    auth_result = [True]
     if auth_docs or is_both:
         driver = open_driver(headed=headed)
         if driver is None:
             sys.exit(1)
         thread_docs_auth = threading.Thread(
-            target=download_docs, args=(doc_sources["auth_req"], driver)
+            target=_auth_download_and_diff,
+            args=(doc_sources["auth_req"], driver, auth_result, not download),
         )
         thread_docs_auth.start()
 
     if no_auth_docs or is_both:
         thread_docs_noauth = threading.Thread(
-            target=download_pdfs, args=(doc_sources["noauth_req"],)
+            target=_noauth_download_and_diff,
+            args=(doc_sources["noauth_req"], not download),
         )
         thread_docs_noauth.start()
 
@@ -52,9 +67,6 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
         thread_docs_auth.join()
     if no_auth_docs or is_both:
         thread_docs_noauth.join()
-
-    if not download:
-        diff_all_folders(doc_sources["noauth_req"])
 
 
 if __name__ == "__main__":

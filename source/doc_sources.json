@@ -29,16 +29,8 @@
             "doc_id": "2677553.1"
         },
         {
-            "desc": "Data Models",
-            "doc_id": "3062423.1"
-        },
-        {
             "desc": "Advanced Release Notes",
             "doc_id": "2704051.1"
-        },
-        {
-            "desc": "Xstore Supplemental Documentation Library",
-            "doc_id": "1994467.1"
         }
     ],
     "noauth_req": [
@@ -115,6 +107,14 @@
         {
             "desc": "Locatization func docs (KA903) refactor",
             "doc_id": "2534504.2"
+        },
+        {
+            "desc": "Xstore Supplemental Documentation Library",
+            "doc_id": "1994467.1"
+        },
+        {
+            "desc": "Data Models",
+            "doc_id": "3062423.1"
         }
     ]
 }
