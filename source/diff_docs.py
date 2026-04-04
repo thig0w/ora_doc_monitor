@@ -52,10 +52,16 @@ def copy_files(diff_tab: list[tuple[str, str, str]], desc: str = ""):
     for file in diff_tab:
         if file[1] != "":
             root, extension = os.path.splitext(os.path.basename(file[1]))
-            shutil.copy(file[1], f"{diff_file_path}/{root}_new{extension}")
+            try:
+                shutil.copy(file[1], f"{diff_file_path}/{root}_new{extension}")
+            except FileNotFoundError:
+                logger.warning(f"File not found, skipping: {file[1]}")
         if file[2] != "":
             root, extension = os.path.splitext(os.path.basename(file[2]))
-            shutil.copy(file[2], f"{diff_file_path}/{root}_old{extension}")
+            try:
+                shutil.copy(file[2], f"{diff_file_path}/{root}_old{extension}")
+            except FileNotFoundError:
+                logger.warning(f"File not found, skipping: {file[2]}")
 
 
 def draw_result_table(diff_tab: list[tuple[str, str, str]], desc: str = ""):
@@ -129,8 +135,14 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     # Remove old files from base (hashes only in base, not in work)
     for hash_, fname in base_hashes.items():
         if hash_ not in work_hashes:
-            os.remove(os.path.join(base_dir, fname))
-            logger.info(f"Removed old file from base: {fname}")
+            base_file = os.path.join(base_dir, fname)
+            try:
+                os.remove(base_file)
+                logger.info(f"Removed old file from base: {fname}")
+            except FileNotFoundError:
+                logger.warning(
+                    f"File already absent from base, skipping remove: {fname}"
+                )
 
     # Move new files from work to base (hashes only in work, not in base)
     for hash_, fname in work_hashes.items():

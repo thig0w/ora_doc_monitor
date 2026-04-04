@@ -359,7 +359,9 @@ def load_page_and_collect_links(wait, source):
     # 3. Links are ready
     elems = wait.until(
         lambda d: anchors_have_href(
-            d.find_elements(By.CSS_SELECTOR, "a[data-oce-meta-data]")
+            d.find_elements(
+                By.CSS_SELECTOR, "a[data-oce-meta-data], a[data-ucm-meta-data]"
+            )
         )
     )
 
