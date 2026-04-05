@@ -31,3 +31,12 @@ repos:
   hooks:
     - id: uv-lock
       files: ^(uv\.lock|pyproject\.toml)$
+
+- repo: local
+  hooks:
+    - id: pytest
+      name: pytest
+      entry: uv run pytest tests/ -v
+      language: system
+      pass_filenames: false
+      always_run: true
