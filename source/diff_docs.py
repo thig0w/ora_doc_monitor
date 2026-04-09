@@ -156,22 +156,20 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
 
 
 def diff_auth_folders():
-    with progressbar:
-        comp_folders(
-            os.path.join(os.getcwd(), "func_docs_work"),
-            os.path.join(os.getcwd(), "func_docs"),
-            "func_docs",
-        )
+    comp_folders(
+        os.path.join(os.getcwd(), "func_docs_work"),
+        os.path.join(os.getcwd(), "func_docs"),
+        "func_docs",
+    )
 
 
 def diff_noauth_folders(noauth_source: list[dict[str, str]]):
-    with progressbar:
-        for i in noauth_source:
-            comp_folders(
-                os.path.join(os.getcwd(), f"{i['desc']}_work"),
-                os.path.join(os.getcwd(), f"{i['desc']}"),
-                f"{i['desc']}",
-            )
+    for i in noauth_source:
+        comp_folders(
+            os.path.join(os.getcwd(), f"{i['desc']}_work"),
+            os.path.join(os.getcwd(), f"{i['desc']}"),
+            f"{i['desc']}",
+        )
 
 
 if __name__ == "__main__":

@@ -14,62 +14,61 @@ headers = {
 
 
 def download_pdfs(sources: list[dict[str, str]]):
-    with progressbar:
-        for source in progressbar.track(sources, description="Sources"):
-            # Ensure persistent base folder exists
-            base_dir = os.path.join(os.getcwd(), source["desc"])
-            os.makedirs(base_dir, exist_ok=True)
+    for source in progressbar.track(sources, description="Sources"):
+        # Ensure persistent base folder exists
+        base_dir = os.path.join(os.getcwd(), source["desc"])
+        os.makedirs(base_dir, exist_ok=True)
 
-            # Reset work folder for a clean download
-            output_dir = os.path.join(os.getcwd(), f"{source['desc']}_work")
-            if os.path.isdir(output_dir):
-                shutil.rmtree(output_dir)
-            os.makedirs(output_dir, exist_ok=True)
-            try:
-                response = requests.get(source["doc_id"], headers=headers)
-                response.raise_for_status()
+        # Reset work folder for a clean download
+        output_dir = os.path.join(os.getcwd(), f"{source['desc']}_work")
+        if os.path.isdir(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        try:
+            response = requests.get(source["doc_id"], headers=headers)
+            response.raise_for_status()
 
-                soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
 
-                # Finds all .pdf files
-                pdf_links = soup.find_all(
-                    "a", href=lambda href: href and href.endswith(".pdf")
-                )
+            # Finds all .pdf files
+            pdf_links = soup.find_all(
+                "a", href=lambda href: href and href.endswith(".pdf")
+            )
 
-                logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
-                for link in progressbar.track(
-                    pdf_links, description=f"{source['desc']} links"
-                ):
-                    pdf_url = link["href"]
+            logger.info(f"{len(pdf_links)} PDFs found! Starting Downloading")
+            for link in progressbar.track(
+                pdf_links, description=f"{source['desc']} links"
+            ):
+                pdf_url = link["href"]
 
-                    # appends the url for relative links
-                    if not pdf_url.startswith("http"):
-                        pdf_url = urljoin(source["doc_id"], pdf_url)
+                # appends the url for relative links
+                if not pdf_url.startswith("http"):
+                    pdf_url = urljoin(source["doc_id"], pdf_url)
 
-                    # generate the file name from the url name
-                    filename = os.path.join(output_dir, pdf_url.split("/")[-1])
+                # generate the file name from the url name
+                filename = os.path.join(output_dir, pdf_url.split("/")[-1])
 
-                    # Dowload the file
-                    logger.debug(f"Downloading: {pdf_url}")
-                    try:
-                        pdf_response = requests.get(pdf_url, headers=headers)
-                        pdf_response.raise_for_status()
-                    except Exception as e:
-                        logger.warning(f"Error trying to download, re-queuing: {e}")
-                        if pdf_links.count(link) < 5:
-                            pdf_links.append(link)
-                        else:
-                            logger.critical(f"Failed to download: {link}")
-                        continue
+                # Dowload the file
+                logger.debug(f"Downloading: {pdf_url}")
+                try:
+                    pdf_response = requests.get(pdf_url, headers=headers)
+                    pdf_response.raise_for_status()
+                except Exception as e:
+                    logger.warning(f"Error trying to download, re-queuing: {e}")
+                    if pdf_links.count(link) < 5:
+                        pdf_links.append(link)
+                    else:
+                        logger.critical(f"Failed to download: {link}")
+                    continue
 
-                    with open(filename, "wb") as pdf_file:
-                        pdf_file.write(pdf_response.content)
+                with open(filename, "wb") as pdf_file:
+                    pdf_file.write(pdf_response.content)
 
-                    logger.debug(f"File Saved: {filename}")
-                    # sleep to avoid connection to be blocked
-                    sleep(1)
-            except Exception as e:
-                logger.error(f"Failed: {e}")
+                logger.debug(f"File Saved: {filename}")
+                # sleep to avoid connection to be blocked
+                sleep(1)
+        except Exception as e:
+            logger.error(f"Failed: {e}")
 
 
 if __name__ == "__main__":

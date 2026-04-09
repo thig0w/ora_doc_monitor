@@ -282,8 +282,6 @@ def download_docs(
 
                 logger.debug("Start downloading...")
 
-                progressbar.start()
-
                 for idx, i in enumerate(
                     progressbar.track(
                         href_links,
@@ -330,7 +328,6 @@ def download_docs(
             logger.error(f"Download wait timed out: {e}")
             if result is not None:
                 result[0] = False
-        progressbar.stop()
         alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()
         if driver is not None:

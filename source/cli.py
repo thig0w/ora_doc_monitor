@@ -6,7 +6,7 @@ import threading
 import click
 from diff_docs import diff_auth_folders, diff_noauth_folders
 from doc_extractor import download_docs, open_driver
-from interface import logger
+from interface import logger, progressbar
 from url_extractor import download_pdfs
 
 
@@ -53,20 +53,23 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
             target=_auth_download_and_diff,
             args=(doc_sources["auth_req"], driver, auth_result, not download),
         )
-        thread_docs_auth.start()
 
     if no_auth_docs or is_both:
         thread_docs_noauth = threading.Thread(
             target=_noauth_download_and_diff,
             args=(doc_sources["noauth_req"], not download),
         )
-        thread_docs_noauth.start()
 
-    # Wait for threads to complete
-    if auth_docs or is_both:
-        thread_docs_auth.join()
-    if no_auth_docs or is_both:
-        thread_docs_noauth.join()
+    with progressbar:
+        if auth_docs or is_both:
+            thread_docs_auth.start()
+        if no_auth_docs or is_both:
+            thread_docs_noauth.start()
+
+        if auth_docs or is_both:
+            thread_docs_auth.join()
+        if no_auth_docs or is_both:
+            thread_docs_noauth.join()
 
 
 if __name__ == "__main__":
