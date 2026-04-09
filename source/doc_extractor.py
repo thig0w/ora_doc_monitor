@@ -1,6 +1,7 @@
 import glob
 import os
 import shutil
+import subprocess
 import threading
 from time import sleep, time
 
@@ -23,6 +24,17 @@ class NoValidLinksFound(Exception):
 
 load_dotenv()
 
+
+def _resolve_secret(value: str | None) -> str | None:
+    """If value is a 1Password reference (op://...), resolve it via the op CLI."""
+    if value and value.startswith("op://"):
+        result = subprocess.run(
+            ["op", "read", value], capture_output=True, text=True, check=True
+        )
+        return result.stdout.strip()
+    return value
+
+
 # Persistent base folder — always exists, never deleted
 _base_path = os.path.join(os.getcwd(), "func_docs")
 os.makedirs(_base_path, exist_ok=True)
@@ -32,14 +44,14 @@ file_path = os.path.join(os.getcwd(), "func_docs_work")
 
 
 def watchdog():
-    logger.error("Watchdog expired. Exiting...")
+    logger.critical("Watchdog expired. Exiting...")
     child_process = psutil.Process(os.getpid()).children(recursive=True)
     for process in child_process:
-        logger.error(f"Killing child process: {process.pid} - {process.name()}")
+        logger.warning(f"Killing child process: {process.pid} - {process.name()}")
         try:
             process.kill()
         except psutil.NoSuchProcess as e:
-            logger.error(f"Error trying to terminate child process: {e}")
+            logger.warning(f"Error trying to terminate child process: {e}")
             continue
 
 
@@ -70,10 +82,10 @@ def wait_for_downloads(directory, timeout=10800, poll_interval=15):
 
 def open_driver(headed: bool = False) -> webdriver:
     logger.debug("Creating webdriver instance")
-    # Get user/pass
-    mos_user = os.getenv("MOSUSER")
-    mos_pass = os.getenv("MOSPASS")
-    mos_mfa_key = os.getenv("MOSMFAKEY")
+    # Get user/pass — values may be plain strings or 1Password references (op://...)
+    mos_user = _resolve_secret(os.getenv("MOSUSER"))
+    mos_pass = _resolve_secret(os.getenv("MOSPASS"))
+    mos_mfa_key = _resolve_secret(os.getenv("MOSMFAKEY")).replace(" ", "")
 
     # Init WebDriver options
     logger.debug("setting firefox options")
@@ -104,7 +116,7 @@ def open_driver(headed: bool = False) -> webdriver:
         firefox_options.set_preference("network.http.throttle.enable", False)
 
     if mos_user is None or mos_pass is None:
-        logger.error("Please set MOSUSER and MOSPASS environment variables!")
+        logger.critical("Please set MOSUSER and MOSPASS environment variables!")
         return None
 
     try:
@@ -199,7 +211,6 @@ def open_driver(headed: bool = False) -> webdriver:
                 (By.ID, "idcs-mfa-mfa-auth-passcode-input|input")
             )
         )
-        logger.debug(f"TOPT sent {TOTP(mos_mfa_key).now()}")
         mfa_field.send_keys(TOTP(mos_mfa_key).now())
         mfa_field.send_keys(Keys.RETURN)
 
@@ -271,8 +282,6 @@ def download_docs(
 
                 logger.debug("Start downloading...")
 
-                progressbar.start()
-
                 for idx, i in enumerate(
                     progressbar.track(
                         href_links,
@@ -282,7 +291,7 @@ def download_docs(
                     href = i.get("href", "") or ""
                     data_href = i.get("data_href", "") or ""
                     text = i.get("text", "")
-                    logger.info(
+                    logger.debug(
                         f"Downloading: {text} - href: {href} - data-href: {data_href}"
                     )
                     if "javascript" in href:
@@ -319,7 +328,6 @@ def download_docs(
             logger.error(f"Download wait timed out: {e}")
             if result is not None:
                 result[0] = False
-        progressbar.stop()
         alarm = threading.Timer(interval=4, function=watchdog)
         alarm.start()
         if driver is not None:

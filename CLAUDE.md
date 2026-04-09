@@ -43,11 +43,13 @@ Ruff config is in `pyproject.toml`: target Python 3.12, line length 88, double q
 ## Required Environment Variables
 
 ```
-MOSUSER=<Oracle Support username>
-MOSPASS=<Oracle Support password>
-MOSMFAKEY=<Base32-encoded TOTP key>
-LOG_LVL=<DEBUG|INFO|WARNING|ERROR>  # optional, default: ERROR
+MOSUSER=<Oracle Support username>      # or op://vault/item/field
+MOSPASS=<Oracle Support password>      # or op://vault/item/field
+MOSMFAKEY=<Base32-encoded TOTP key>   # or op://vault/item/field
+LOG_LVL=<DEBUG|INFO|WARNING|ERROR>    # optional, default: ERROR
 ```
+
+Values starting with `op://` are resolved at runtime via the `op` CLI (1Password). Requires the 1Password CLI to be installed and authenticated.
 
 ## Architecture
 

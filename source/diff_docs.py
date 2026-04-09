@@ -23,7 +23,7 @@ def generate_checksums(folder_path: str, output_file: str):
             entries.append(f"{md5.hexdigest()}  {fname}\n")
     with open(output_file, "w") as f:
         f.writelines(entries)
-    logger.info(f"Checksums written to {output_file}")
+    logger.debug(f"Checksums written to {output_file}")
 
 
 def parse_checksums(checksum_file: str) -> dict[str, str]:
@@ -84,11 +84,11 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     logger.info(f"Comparing folders: {work_dir} and {base_dir}")
 
     if not os.path.isdir(work_dir):
-        logger.info(f"Work folder not found, skipping: {work_dir}")
+        logger.warning(f"Work folder not found, skipping: {work_dir}")
         return
 
     if len(os.listdir(work_dir)) == 0:
-        logger.info(f"No files found in {work_dir}")
+        logger.warning(f"No files found in {work_dir}")
         return
 
     # Ensure base exists before comparison
@@ -105,14 +105,12 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
         generate_checksums(base_dir, base_checksum_file)
     base_hashes = parse_checksums(base_checksum_file)
 
-    logger.info(f"Starting diff report for {desc}...")
+    logger.debug(f"Starting diff report for {desc}...")
     diff_tab: list[tuple[str, str, str]] = []
 
-    # Add a main task for the overall comparison
-    diff_task = progressbar.add_task(  # noqa:F841
+    diff_task = progressbar.add_task(
         f"[cyan]Comparing directories for {desc}...", total=None
     )
-    progressbar.start()
 
     for hash_, fname in work_hashes.items():
         if hash_ not in base_hashes:
@@ -129,8 +127,7 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
         copy_files(diff_tab, desc)
         progressbar.log(table)
 
-    progressbar.stop_task(diff_task)
-    progressbar.stop()
+    progressbar.remove_task(diff_task)
 
     # Remove old files from base (hashes only in base, not in work)
     for hash_, fname in base_hashes.items():
@@ -138,7 +135,7 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
             base_file = os.path.join(base_dir, fname)
             try:
                 os.remove(base_file)
-                logger.info(f"Removed old file from base: {fname}")
+                logger.debug(f"Removed old file from base: {fname}")
             except FileNotFoundError:
                 logger.warning(
                     f"File already absent from base, skipping remove: {fname}"
@@ -148,7 +145,7 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     for hash_, fname in work_hashes.items():
         if hash_ not in base_hashes:
             shutil.move(os.path.join(work_dir, fname), os.path.join(base_dir, fname))
-            logger.info(f"Moved new file to base: {fname}")
+            logger.debug(f"Moved new file to base: {fname}")
 
     # Move 000_checksumfile.md from work to base
     shutil.move(work_checksum_file, os.path.join(base_dir, "000_checksumfile.md"))
