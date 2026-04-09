@@ -108,11 +108,9 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
     logger.debug(f"Starting diff report for {desc}...")
     diff_tab: list[tuple[str, str, str]] = []
 
-    # Add a main task for the overall comparison
-    diff_task = progressbar.add_task(  # noqa:F841
+    diff_task = progressbar.add_task(
         f"[cyan]Comparing directories for {desc}...", total=None
     )
-    progressbar.start()
 
     for hash_, fname in work_hashes.items():
         if hash_ not in base_hashes:
@@ -129,8 +127,7 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
         copy_files(diff_tab, desc)
         progressbar.log(table)
 
-    progressbar.stop_task(diff_task)
-    progressbar.stop()
+    progressbar.remove_task(diff_task)
 
     # Remove old files from base (hashes only in base, not in work)
     for hash_, fname in base_hashes.items():
@@ -159,20 +156,22 @@ def comp_folders(work_dir: str, base_dir: str, desc: str = ""):
 
 
 def diff_auth_folders():
-    comp_folders(
-        os.path.join(os.getcwd(), "func_docs_work"),
-        os.path.join(os.getcwd(), "func_docs"),
-        "func_docs",
-    )
+    with progressbar:
+        comp_folders(
+            os.path.join(os.getcwd(), "func_docs_work"),
+            os.path.join(os.getcwd(), "func_docs"),
+            "func_docs",
+        )
 
 
 def diff_noauth_folders(noauth_source: list[dict[str, str]]):
-    for i in noauth_source:
-        comp_folders(
-            os.path.join(os.getcwd(), f"{i['desc']}_work"),
-            os.path.join(os.getcwd(), f"{i['desc']}"),
-            f"{i['desc']}",
-        )
+    with progressbar:
+        for i in noauth_source:
+            comp_folders(
+                os.path.join(os.getcwd(), f"{i['desc']}_work"),
+                os.path.join(os.getcwd(), f"{i['desc']}"),
+                f"{i['desc']}",
+            )
 
 
 if __name__ == "__main__":
