@@ -1,21 +1,16 @@
-import glob
+import contextlib
 import os
 import shutil
 import subprocess
 import threading
-from time import sleep, time
+from time import sleep
+from urllib.parse import urlparse
 
-import psutil
 from dotenv import load_dotenv
 from interface import logger, progressbar
+from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pyotp import TOTP
-from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.support import expected_conditions as ec
-from selenium.webdriver.support.ui import Select, WebDriverWait
 
 
 class NoValidLinksFound(Exception):
@@ -23,6 +18,16 @@ class NoValidLinksFound(Exception):
 
 
 load_dotenv()
+
+# Module-level playwright instance — started in open_driver, stopped on cleanup
+_pw = None
+
+# Persistent base folder — always exists, never deleted
+_base_path = os.path.join(os.getcwd(), "func_docs")
+os.makedirs(_base_path, exist_ok=True)
+
+# Working download folder — set at download time
+file_path = os.path.join(os.getcwd(), "func_docs_work")
 
 
 def _resolve_secret(value: str | None) -> str | None:
@@ -35,222 +40,122 @@ def _resolve_secret(value: str | None) -> str | None:
     return value
 
 
-# Persistent base folder — always exists, never deleted
-_base_path = os.path.join(os.getcwd(), "func_docs")
-os.makedirs(_base_path, exist_ok=True)
+def _goto(page: Page, url: str) -> None:
+    """Navigate, tolerating NS_BINDING_ABORTED from Oracle MOS redirect chains.
 
-# Working download folder — set at download time
-file_path = os.path.join(os.getcwd(), "func_docs_work")
+    Oracle redirects /support/?kmContentId=… to /ic/builder/…, causing Firefox
+    to abort the original request. The page lands at the correct URL; subsequent
+    _wait_for_jet() calls confirm readiness.
+    """
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+    except Exception as e:
+        if "NS_BINDING_ABORTED" not in str(e):
+            raise
+        logger.debug(f"Navigation redirect absorbed for {url}")
+        # Redirect is still in flight — wait for the destination to load
+        page.wait_for_load_state("domcontentloaded")
+
+
+def _wait_for_jet(page: Page) -> None:
+    """Wait for Oracle JET framework to be fully ready."""
+    page.wait_for_function(
+        "window.oj && oj.Context.getPageContext().getBusyContext().isReady()"
+    )
+    page.locator("oj-vb-content.oj-complete").first.wait_for()
+
+
+def _filename_from_response(response, href: str) -> str:
+    """Extract filename from Content-Disposition header or URL path."""
+    content_disp = response.headers.get("content-disposition", "")
+    if "filename=" in content_disp:
+        fname = content_disp.split("filename=")[-1].strip().strip("\"'")
+        if fname:
+            return fname
+    path = urlparse(href).path
+    return path.split("/")[-1] or "download.pdf"
+
+
+def _cleanup_playwright() -> None:
+    global _pw
+    if _pw is not None:
+        with contextlib.suppress(Exception):
+            _pw.stop()
+        _pw = None
 
 
 def watchdog():
-    logger.critical("Watchdog expired. Exiting...")
-    child_process = psutil.Process(os.getpid()).children(recursive=True)
-    for process in child_process:
-        logger.warning(f"Killing child process: {process.pid} - {process.name()}")
-        try:
-            process.kill()
-        except psutil.NoSuchProcess as e:
-            logger.warning(f"Error trying to terminate child process: {e}")
-            continue
+    logger.critical("Watchdog expired — forcing exit.")
+    _cleanup_playwright()
+    os._exit(1)
 
 
-def count_files_with_extension(folder_path, extension):
-    pattern = os.path.join(folder_path, f"*{extension}")
-    files = glob.glob(pattern)
-    return len(files)
-
-
-# Wait downloads to finish
-def wait_for_downloads(directory, timeout=10800, poll_interval=15):
-    total = count_files_with_extension(directory, ".part")
-
-    wait_bar = progressbar.add_task(
-        "[cyan]Waiting for Downloads to finish...", total=total
-    )
-
-    end_time = time() + timeout
-    while time() < end_time:
-        partial = count_files_with_extension(directory, ".part")
-        progressbar.update(wait_bar, completed=max(total - partial, 0))
-        if partial == 0:
-            return True
-        sleep(poll_interval)
-
-    raise TimeoutError("Downloads were not concluded during the specified time.")
-
-
-def open_driver(headed: bool = False) -> webdriver:
-    logger.debug("Creating webdriver instance")
-    # Get user/pass — values may be plain strings or 1Password references (op://...)
+def open_driver(headed: bool = False) -> Page | None:
+    global _pw
+    logger.debug("Creating Playwright browser instance")
     mos_user = _resolve_secret(os.getenv("MOSUSER"))
     mos_pass = _resolve_secret(os.getenv("MOSPASS"))
     mos_mfa_key = _resolve_secret(os.getenv("MOSMFAKEY")).replace(" ", "")
-
-    # Init WebDriver options
-    logger.debug("setting firefox options")
-    firefox_options = Options()
-    firefox_options.set_preference("browser.download.dir", file_path)
-    firefox_options.set_preference("browser.download.folderList", 2)
-    firefox_options.set_preference("browser.download.manager.showWhenStarting", False)
-    firefox_options.set_preference(
-        "browser.helperApps.neverAsk.saveToDisk",
-        "application/octet-stream,application/pdf",
-    )
-    firefox_options.set_preference("pdfjs.disabled", True)
-    if not headed:
-        firefox_options.add_argument("--headless")
-    else:
-        # Disable background throttling
-        firefox_options.set_preference("dom.min_background_timeout_value", 0)
-        firefox_options.set_preference("dom.min_timeout_value", 0)
-        firefox_options.set_preference(
-            "dom.timeout.enable_budget_timer_throttling", False
-        )
-        firefox_options.set_preference(
-            "browser.tabs.remote.useOcclusionTracking", False
-        )
-        firefox_options.set_preference(
-            "browser.tabs.remote.useWindowOcclusionTracking", False
-        )
-        firefox_options.set_preference("network.http.throttle.enable", False)
 
     if mos_user is None or mos_pass is None:
         logger.critical("Please set MOSUSER and MOSPASS environment variables!")
         return None
 
     try:
-        driver = webdriver.Firefox(options=firefox_options)
+        _pw = sync_playwright().start()
+        browser = _pw.firefox.launch(headless=not headed)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        page.set_default_timeout(60000)
 
-        # Open the Login Page
         logger.debug("Opening Login Page")
-        url = "https://support.oracle.com/support/?kmContentId=1585843"
-        driver.get(url)
+        _goto(page, "https://support.oracle.com/support/?kmContentId=1585843")
 
-        # Setting Driver Wait
-        logger.debug("Setting webdriver timeout")
-        wait = WebDriverWait(
-            driver, 60, ignored_exceptions=[StaleElementReferenceException]
-        )
-
-        # Find and click the Sign In button
+        # Wait for page readiness sentinel, then Oracle JET framework
         logger.debug("Clicking Sign In button")
-        wait.until(ec.element_to_be_clickable((By.ID, "mc-id-other-sign-in-btn")))
+        page.locator("#mc-id-other-sign-in-btn").wait_for(state="visible")
+        _wait_for_jet(page)
 
-        # 1. JET logic ready
-        wait.until(
-            lambda d: d.execute_script("""
-                           return window.oj &&
-                                  oj.Context.getPageContext()
-                                    .getBusyContext()
-                                    .isReady();
-                       """)
-        )
+        page.locator("#mc-id-sign-in-with-commercial-cloud-account-btn").click()
 
-        # 2. JET subtree visible
-        wait.until(
-            lambda d: (
-                "oj-complete"
-                in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute(
-                    "class"
-                )
-            )
-        )
-
-        sign_in_button = wait.until(
-            ec.visibility_of_element_located(
-                (By.ID, "mc-id-sign-in-with-commercial-cloud-account-btn")
-            )
-        )
-        sign_in_button.click()
-
-        # Find tenant textbox
         logger.debug("Submitting tenant")
-        tenant_field = wait.until(ec.visibility_of_element_located((By.ID, "tenant")))
-        tenant_field.send_keys("myoraclesupport")
-        tenant_field.send_keys(Keys.RETURN)
+        page.locator("#tenant").fill("myoraclesupport")
+        page.keyboard.press("Enter")
 
-        # Find selector
-        logger.debug("selecting sso-domain")
-        selector_field = wait.until(
-            ec.visibility_of_element_located(
-                (By.CSS_SELECTOR, "[data-test-id='identity-domain-dropdown']")
-            )
+        logger.debug("Selecting sso-domain")
+        page.locator("[data-test-id='identity-domain-dropdown']").select_option(
+            label="sso-domain"
         )
-        select = Select(selector_field)
-        select.select_by_visible_text("sso-domain")
+        page.locator("#submit-domain").click()
 
-        # Find next Button
-        next_button = wait.until(
-            ec.visibility_of_element_located((By.ID, "submit-domain"))
-        )
-        next_button.click()
-
-        # Find and fill username
         logger.debug("Submitting username")
-        username_field = wait.until(
-            ec.visibility_of_element_located(
-                (By.ID, "idcs-signin-basic-signin-form-username")
-            )
-        )
-        username_field.send_keys(mos_user)
-        username_field.send_keys(Keys.RETURN)
+        page.locator("#idcs-signin-basic-signin-form-username").fill(mos_user)
+        page.keyboard.press("Enter")
 
-        # Find and fill the Password
         logger.debug("Submitting password")
-        password_field = wait.until(
-            ec.visibility_of_element_located((By.ID, "idcs-auth-pwd-input|input"))
-        )
-        password_field.send_keys(mos_pass)
-        password_field.send_keys(Keys.RETURN)
+        # IDs containing | must use attribute selectors (| is a CSS namespace separator)
+        page.locator('[id="idcs-auth-pwd-input|input"]').fill(mos_pass)
+        page.keyboard.press("Enter")
 
-        # Find and fill the 2fa
         logger.debug("Submitting 2fa")
-        mfa_field = wait.until(
-            ec.visibility_of_element_located(
-                (By.ID, "idcs-mfa-mfa-auth-passcode-input|input")
-            )
+        page.locator('[id="idcs-mfa-mfa-auth-passcode-input|input"]').fill(
+            TOTP(mos_mfa_key).now()
         )
-        mfa_field.send_keys(TOTP(mos_mfa_key).now())
-        mfa_field.send_keys(Keys.RETURN)
+        page.keyboard.press("Enter")
 
-        # Must wait auth
-        logger.debug("Waitting to fully load")
-        # Best practice for Oracle JET
-        # 1. JET logic ready
-        wait.until(
-            lambda d: d.execute_script("""
-                   return window.oj &&
-                          oj.Context.getPageContext()
-                            .getBusyContext()
-                            .isReady();
-               """)
-        )
+        logger.debug("Waiting to fully load")
+        _wait_for_jet(page)
 
-        # 2. JET subtree visible
-        wait.until(
-            lambda d: (
-                "oj-complete"
-                in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute(
-                    "class"
-                )
-            )
-        )
+        return page
 
-        return driver
     except Exception as e:
-        logger.error(f"Error trying to Open webdriver and login: {e}")
-    else:
-        profile_dir = driver.capabilities.get("moz:profile")
-        driver.quit()
-        if profile_dir and os.path.isdir(profile_dir):
-            shutil.rmtree(profile_dir, ignore_errors=True)
-
-    return None
+        logger.error(f"Error trying to open browser and login: {e}")
+        _cleanup_playwright()
+        return None
 
 
 def download_docs(
-    sources: list[dict[str, str]], driver: webdriver = None, result: list | None = None
+    sources: list[dict[str, str]], page: Page = None, result: list | None = None
 ):
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
@@ -259,23 +164,18 @@ def download_docs(
 
     base_url = "https://support.oracle.com/support/?kmContentId="
     try:
-        if driver is None:
-            driver = open_driver()
+        if page is None:
+            page = open_driver()
 
         for source in sources:
             try:
-                driver.get(base_url + source["doc_id"].split(".")[0])
-
-                # Wait page load
+                _goto(page, base_url + source["doc_id"].split(".")[0])
                 logger.debug("Waiting first element to load...")
-                # Setting Driver Wait
-                wait = WebDriverWait(driver, 60)
 
                 href_links = execute_with_retry(
                     lambda: load_page_and_collect_links(
-                        wait,  # noqa: B023
+                        page,  # noqa: B023
                         source["doc_id"],  # noqa: B023
-                        driver,  # noqa: B023
                     ),
                     retries=3,
                 )
@@ -295,26 +195,25 @@ def download_docs(
                         f"Downloading: {text} - href: {href} - data-href: {data_href}"
                     )
                     if "javascript" in href:
-                        # Re-find element fresh immediately before click to avoid
-                        # stale reference.
-                        # The download token is session-tied and only triggered via
-                        # the JET click handler.
-                        fresh = driver.find_elements(
-                            By.CSS_SELECTOR,
-                            "a[data-oce-meta-data], a[data-ucm-meta-data]",
-                        )
-                        if idx < len(fresh):
-                            fresh[idx].click()
+                        # Lazy locator re-queries DOM on each call — no stale risk.
+                        # Token is session-tied; must go through JET click handler.
+                        with page.expect_download(timeout=60000) as dl_info:
+                            page.locator(
+                                "a[data-oce-meta-data], a[data-ucm-meta-data]"
+                            ).nth(idx).click()
+                        dl = dl_info.value
+                        dl.save_as(os.path.join(file_path, dl.suggested_filename))
                     else:
-                        driver.execute_script(f"window.open('{href}')")
+                        # Direct URL — fetch via browser session to inherit auth cookies
+                        response = page.request.get(href)
+                        filename = _filename_from_response(response, href)
+                        with open(os.path.join(file_path, filename), "wb") as f:
+                            f.write(response.body())
                     sleep(0.5)
 
-                files = os.listdir(file_path)
-                wait.until(lambda d: any(f.endswith(".pdf") for f in files))  # noqa: B023
-
-            except TimeoutException as e:
+            except PlaywrightTimeoutError as e:
                 logger.error(
-                    f"TimeoutException for source {source['doc_id']}: {e!r} — skipping"
+                    f"TimeoutError for source {source['doc_id']}: {e!r} — skipping"
                 )
                 continue
 
@@ -322,76 +221,49 @@ def download_docs(
         logger.exception(f"{type(e).__name__}: {e!r}")
 
     finally:
-        try:
-            wait_for_downloads(file_path)
-        except TimeoutError as e:
-            logger.error(f"Download wait timed out: {e}")
-            if result is not None:
-                result[0] = False
-        alarm = threading.Timer(interval=4, function=watchdog)
+        alarm = threading.Timer(interval=30, function=watchdog)
         alarm.start()
-        if driver is not None:
-            profile_dir = driver.capabilities.get("moz:profile")
-            driver.quit()
-            if profile_dir and os.path.isdir(profile_dir):
-                shutil.rmtree(profile_dir, ignore_errors=True)
-                logger.debug(f"Removed Firefox temp profile: {profile_dir}")
+        try:
+            if page is not None:
+                page.context.browser.close()
+        except Exception as e:
+            logger.error(f"Error closing browser: {e}")
+        _cleanup_playwright()
         alarm.cancel()
 
 
-def load_page_and_collect_links(wait, source, driver):
-    wait.until(
-        ec.visibility_of_element_located(
-            (By.CLASS_NAME, "oj-sp-item-overview-page-main-strip")
-        )
-    )
+def load_page_and_collect_links(page: Page, source: str) -> list[dict]:
+    page.locator(".oj-sp-item-overview-page-main-strip").wait_for()
 
     logger.debug("Waiting for the page to fully load...")
-    # Best practice for Oracle JET
-    # 1. JET logic ready
-    wait.until(
-        lambda d: d.execute_script("""
-           return window.oj &&
-                  oj.Context.getPageContext()
-                    .getBusyContext()
-                    .isReady();
-       """)
-    )
+    _wait_for_jet(page)
 
-    # 2. JET subtree visible
-    wait.until(
-        lambda d: (
-            "oj-complete"
-            in d.find_element(By.CSS_SELECTOR, "oj-vb-content").get_attribute("class")
-        )
-    )
-
-    # 3. Links are ready
-    elems = wait.until(
-        lambda d: anchors_have_href(
-            d.find_elements(
-                By.CSS_SELECTOR, "a[data-oce-meta-data], a[data-ucm-meta-data]"
-            )
-        )
-    )
+    # Wait until link elements are present and at least one has a non-empty href
+    page.wait_for_function("""
+        () => {
+            const elems = document.querySelectorAll(
+                'a[data-oce-meta-data], a[data-ucm-meta-data]'
+            );
+            return elems.length > 0 &&
+                   Array.from(elems).some(el => {
+                       const h = el.getAttribute('href');
+                       return h && h.trim().length > 0;
+                   });
+        }
+    """)
 
     # Extract all attributes atomically in one JS call before DOM can re-render
-    link_data = driver.execute_script(
-        """
-        var elems = arguments[0];
-        return Array.from(elems).map(function(el) {
-            return {
-                href: el.getAttribute('href'),
-                data_href: el.getAttribute('data-href'),
-                text: el.textContent.trim()
-            };
-        });
-    """,
-        elems,
+    elements = page.query_selector_all("a[data-oce-meta-data], a[data-ucm-meta-data]")
+    link_data = page.evaluate(
+        """(elems) => elems.map(el => ({
+            href: el.getAttribute('href'),
+            data_href: el.getAttribute('data-href'),
+            text: el.textContent.trim()
+        }))""",
+        elements,
     )
 
     valid_links = [d for d in link_data if d.get("href")]
-
     if not valid_links:
         raise NoValidLinksFound(f"No links found for {source}")
 
@@ -402,26 +274,13 @@ def execute_with_retry(func, retries=3):
     for retry in range(1, retries + 1):
         try:
             return func()
-        except (NoValidLinksFound, StaleElementReferenceException) as e:
-            if logger:
-                logger.warning(f"{e} — retrying ({retry}/{retries})")
+        except NoValidLinksFound as e:
+            logger.warning(f"{e} — retrying ({retry}/{retries})")
             if retry == retries:
                 raise
         except Exception:
             # unexpected exception → fail fast
             raise
-
-
-def anchors_have_href(elements):
-    if not elements:
-        return False
-
-    for el in elements:
-        href = el.get_attribute("href")
-        if not href or href.strip() == "":
-            return False
-
-    return elements
 
 
 if __name__ == "__main__":

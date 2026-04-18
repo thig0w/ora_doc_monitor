@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 import threading
 
 import click
@@ -10,7 +9,13 @@ from interface import logger, progressbar
 from url_extractor import download_pdfs
 
 
-def _auth_download_and_diff(sources, driver, auth_result, run_diff):
+def _auth_download_and_diff(sources, headed, auth_result, run_diff):
+    # open_driver must run on the same thread as download_docs —
+    # Playwright's sync API is not thread-safe (greenlet constraint).
+    driver = open_driver(headed=headed)
+    if driver is None:
+        auth_result[0] = False
+        return
     download_docs(sources, driver, auth_result)
     if run_diff and auth_result[0]:
         diff_auth_folders()
@@ -46,12 +51,9 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
     # infos that need auth
     auth_result = [True]
     if auth_docs or is_both:
-        driver = open_driver(headed=headed)
-        if driver is None:
-            sys.exit(1)
         thread_docs_auth = threading.Thread(
             target=_auth_download_and_diff,
-            args=(doc_sources["auth_req"], driver, auth_result, not download),
+            args=(doc_sources["auth_req"], headed, auth_result, not download),
         )
 
     if no_auth_docs or is_both:
