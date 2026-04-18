@@ -2,11 +2,13 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from time import sleep
 
 from dotenv import load_dotenv
 from interface import logger, progressbar
 from playwright.sync_api import BrowserContext, Page, sync_playwright
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pyotp import TOTP
 
@@ -32,19 +34,46 @@ SSO_DOMAIN_OCID = (
 DOC_DISPLAY_URL = "https://support.oracle.com/epmos/faces/DocumentDisplay?id="
 
 
-def _resolve_secret(value: str | None) -> str | None:
+def _resolve_secret(
+    value: str | None, retries: int = 3, backoff: float = 1.5
+) -> str | None:
     """Resolve a credential value, transparently dereferencing 1Password refs.
 
-    If ``value`` is a ``op://vault/item/field`` reference, shells out to the
+    If ``value`` is an ``op://vault/item/field`` reference, shells out to the
     ``op`` CLI to read the secret. Plain strings (and ``None``) are returned
     as-is so the caller can mix stored secrets and inline values freely.
+
+    The ``op`` CLI fails intermittently (session re-auth, biometric timeout,
+    throttling when several reads happen in a row), so non-zero exits are
+    retried with linear backoff. The CLI's stderr is logged on every failure
+    so a persistent error is visible before the final raise.
     """
-    if value and value.startswith("op://"):
+    if not (value and value.startswith("op://")):
+        return value
+
+    last_err: subprocess.CalledProcessError | None = None
+    for attempt in range(1, retries + 1):
         result = subprocess.run(
-            ["op", "read", value], capture_output=True, text=True, check=True
+            ["op", "read", value], capture_output=True, text=True, check=False
         )
-        return result.stdout.strip()
-    return value
+        if result.returncode == 0:
+            return result.stdout.strip()
+
+        stderr = (result.stderr or "").strip()
+        logger.warning(
+            f"op read failed for {value!r} (attempt {attempt}/{retries}, "
+            f"exit {result.returncode}): {stderr or '<no stderr>'}"
+        )
+        last_err = subprocess.CalledProcessError(
+            result.returncode,
+            ["op", "read", value],
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+        if attempt < retries:
+            sleep(backoff * attempt)
+
+    raise last_err
 
 
 # Persistent base folder — always exists, never deleted
@@ -79,53 +108,84 @@ def _login(page: Page) -> bool:
 
     mos_mfa_key = mos_mfa_raw.replace(" ", "")
 
+    step_timeout = 45000
+
     logger.debug("Opening MOS sign-in page")
     page.goto("https://support.oracle.com/signin/", wait_until="domcontentloaded")
 
+    # Each screen transition is guarded by a wait_for on the next screen's
+    # distinctive element. JET does SPA-style view switches without URL
+    # changes, so expect_navigation is not reliable — explicit element
+    # waits are the barrier that actually matters here.
+    sign_in_btn = page.get_by_role("button", name="Sign in with your commercial")
+    sign_in_btn.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Clicking 'Sign in with your commercial'")
-    page.get_by_role("button", name="Sign in with your commercial").click()
+    sign_in_btn.click()
 
+    tenancy_field = page.get_by_role("textbox", name="Tenancy")
+    tenancy_field.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Submitting tenancy")
-    page.get_by_role("textbox", name="Tenancy").fill("myoraclesupport")
+    tenancy_field.fill("myoraclesupport")
     page.get_by_role("button", name="Continue").click()
 
+    domain_dropdown = page.locator('[data-test-id="identity-domain-dropdown"]')
+    domain_dropdown.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Selecting identity domain")
-    page.locator('[data-test-id="identity-domain-dropdown"]').select_option(
-        SSO_DOMAIN_OCID
-    )
+    domain_dropdown.select_option(SSO_DOMAIN_OCID)
     page.get_by_role("button", name="Next").click()
 
+    username_field = page.get_by_role("textbox", name="Username or email")
+    username_field.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Submitting username")
-    page.get_by_role("textbox", name="Username or email").fill(mos_user)
+    username_field.fill(mos_user)
     page.get_by_role("button", name="Next").click()
 
+    pwd_field = page.locator('[id="idcs-auth-pwd-input|input"]')
+    pwd_field.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Submitting password")
-    page.locator('[id="idcs-auth-pwd-input|input"]').fill(mos_pass)
+    pwd_field.fill(mos_pass)
     page.get_by_role("button", name="Sign In").click()
 
+    passcode_field = page.get_by_role("textbox", name="Passcode")
+    passcode_field.wait_for(state="visible", timeout=step_timeout)
     logger.debug("Submitting 2fa")
-    page.get_by_role("textbox", name="Passcode").fill(TOTP(mos_mfa_key).now())
+    passcode_field.fill(TOTP(mos_mfa_key).now())
     page.get_by_role("button", name="Verify").click()
 
     logger.debug("Waiting for post-login redirect")
     page.wait_for_url("**/support.oracle.com/**", timeout=60000)
-    page.wait_for_load_state("domcontentloaded", timeout=30000)
-
-    # Oracle fires a few more redirects right after the SSO handshake lands.
-    sleep(5)
+    # Oracle fires a few more redirects right after the SSO handshake lands —
+    # networkidle waits deterministically for that cascade to settle.
+    try:
+        page.wait_for_load_state("networkidle", timeout=45000)
+    except PlaywrightTimeoutError as e:
+        logger.warning(f"Post-login networkidle timed out: {e} — continuing")
     return True
 
 
 def _goto_doc(page: Page, doc_id: str) -> None:
     """Navigate to the ``DocumentDisplay`` page for the given MOS doc id.
 
-    Uses the already-authenticated session on ``page`` and waits for the
-    initial DOM plus a ``networkidle`` state so any JET/iframe assets finish
-    loading before the caller starts collecting links.
+    Uses the already-authenticated session on ``page``. Oracle routinely
+    interrupts the initial request with an internal redirect, which makes
+    Playwright raise ``NS_BINDING_ABORTED`` even though the target page ends
+    up loading; that specific error is caught and the follow-up waits
+    (``networkidle`` and the link-presence check in ``_collect_links``) are
+    left to confirm whether the page actually rendered.
     """
+    target = DOC_DISPLAY_URL + doc_id
     logger.debug(f"Navigating to DocumentDisplay?id={doc_id}")
-    page.goto(DOC_DISPLAY_URL + doc_id, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_load_state("networkidle", timeout=45000)
+    try:
+        page.goto(target, wait_until="commit", timeout=60000)
+    except PlaywrightError as e:
+        if "NS_BINDING_ABORTED" in str(e):
+            logger.debug(f"Goto aborted by Oracle redirect — continuing: {e}")
+        else:
+            raise
+    try:
+        page.wait_for_load_state("networkidle", timeout=45000)
+    except PlaywrightTimeoutError as e:
+        logger.warning(f"networkidle timed out for {doc_id}: {e} — continuing")
 
 
 def _collect_links(page: Page, source_id: str) -> list[dict]:
@@ -263,10 +323,11 @@ def download_docs(
     sources: list[dict[str, str]],
     headed: bool = False,
     result: list | None = None,
+    login_done: threading.Event | None = None,
 ) -> None:
-    """Open Chromium via Playwright, log into MOS and download every source.
+    """Open Firefox via Playwright, log into MOS and download every source.
 
-    Owns the full browser lifecycle: launches Chromium, creates a download-
+    Owns the full browser lifecycle: launches Firefox, creates a download-
     enabled context, logs in once, and then iterates ``sources`` — each
     entry is a dict with ``desc`` and ``doc_id`` keys — navigating to its
     ``DocumentDisplay`` page and downloading every attached file into the
@@ -281,6 +342,12 @@ def download_docs(
     as an out-parameter — it is flipped to ``[False]`` whenever the run
     aborts early (missing credentials, unhandled exception) so callers can
     skip any downstream steps that depend on a successful download.
+
+    ``login_done`` is an optional :class:`threading.Event` that is set as
+    soon as the MOS login completes (successfully or not) so sibling threads
+    can hold off heavy network activity while SSO is still in progress. The
+    event is always set before the function returns, even on failure, so
+    waiters never hang.
     """
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
@@ -290,10 +357,11 @@ def download_docs(
     with sync_playwright() as p:
         browser = None
         try:
-            logger.debug("Launching Chromium via Playwright")
-            browser = p.chromium.launch(
+            logger.debug("Launching Firefox via Playwright")
+            browser = p.firefox.launch(
                 headless=not headed,
                 slow_mo=300 if headed else 0,
+                firefox_user_prefs={"pdfjs.disabled": True},
             )
             context = browser.new_context(
                 viewport={"width": 1280, "height": 900},
@@ -302,7 +370,10 @@ def download_docs(
             page = context.new_page()
             page.set_default_timeout(60000)
 
-            if not _login(page):
+            login_ok = _login(page)
+            if login_done is not None:
+                login_done.set()
+            if not login_ok:
                 if result is not None:
                     result[0] = False
                 return
@@ -350,6 +421,9 @@ def download_docs(
             if result is not None:
                 result[0] = False
         finally:
+            # Make sure waiters never hang if we aborted before/while logging in.
+            if login_done is not None and not login_done.is_set():
+                login_done.set()
             if browser is not None:
                 try:
                     browser.close()
