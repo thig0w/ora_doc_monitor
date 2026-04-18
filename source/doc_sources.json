@@ -5,10 +5,6 @@
             "doc_id": "1585843.1"
         },
         {
-            "desc": "Extensions docs",
-            "doc_id": "2978473.1"
-        },
-        {
             "desc": "Rics func docs",
             "doc_id": "2643542.1"
         },
@@ -111,6 +107,10 @@
         {
             "desc": "Xstore Supplemental Documentation Library",
             "doc_id": "1994467.1"
+        },
+        {
+            "desc": "Extensions docs - error when trying to download",
+            "doc_id": "2978473.1"
         },
         {
             "desc": "Data Models",

@@ -1,17 +1,18 @@
 import json
 import os
-import sys
 import threading
 
 import click
+from auth_extractor import download_docs as download_auth_docs
 from diff_docs import diff_auth_folders, diff_noauth_folders
-from doc_extractor import download_docs, open_driver
 from interface import logger, progressbar
 from url_extractor import download_pdfs
 
 
-def _auth_download_and_diff(sources, driver, auth_result, run_diff):
-    download_docs(sources, driver, auth_result)
+def _auth_download_and_diff(sources, headed, auth_result, run_diff):
+    # Playwright must be instantiated inside the thread that uses it — its sync
+    # handles cannot cross threads. download_auth_docs owns the full lifecycle.
+    download_auth_docs(sources, headed=headed, result=auth_result)
     if run_diff and auth_result[0]:
         diff_auth_folders()
 
@@ -46,12 +47,9 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
     # infos that need auth
     auth_result = [True]
     if auth_docs or is_both:
-        driver = open_driver(headed=headed)
-        if driver is None:
-            sys.exit(1)
         thread_docs_auth = threading.Thread(
             target=_auth_download_and_diff,
-            args=(doc_sources["auth_req"], driver, auth_result, not download),
+            args=(doc_sources["auth_req"], headed, auth_result, not download),
         )
 
     if no_auth_docs or is_both:
