@@ -9,11 +9,18 @@ from interface import logger, progressbar
 from url_extractor import download_pdfs
 
 
-def _auth_download_and_diff(sources, headed, auth_result, run_diff, login_done):
+def _auth_download_and_diff(
+    sources, headed, auth_result, run_diff, login_done, workers
+):
     # Playwright must be instantiated inside the thread that uses it — its sync
-    # handles cannot cross threads. download_auth_docs owns the full lifecycle.
+    # handles cannot cross threads. download_auth_docs owns the full lifecycle
+    # and spawns ``workers`` sub-threads that share a single logged-in session.
     download_auth_docs(
-        sources, headed=headed, result=auth_result, login_done=login_done
+        sources,
+        headed=headed,
+        result=auth_result,
+        login_done=login_done,
+        workers=workers,
     )
     if run_diff and auth_result[0]:
         diff_auth_folders()
@@ -43,7 +50,15 @@ def read_json():
 @click.option("-n", "--no_auth_docs", is_flag=True, help="Download docs without auth")
 @click.option("-h", "--headed", is_flag=True, help="Run browser in headless mode")
 @click.option("-d", "--download", is_flag=True, help="Download only, do not run diff")
-def get_docs(auth_docs, no_auth_docs, headed, download):
+@click.option(
+    "-w",
+    "--workers",
+    type=click.IntRange(min=1),
+    default=2,
+    show_default=True,
+    help="Parallel worker browsers for auth docs (share a single login).",
+)
+def get_docs(auth_docs, no_auth_docs, headed, download, workers):
     is_both = not (auth_docs or no_auth_docs)
     logger.info("Starting from CLI")
 
@@ -68,6 +83,7 @@ def get_docs(auth_docs, no_auth_docs, headed, download):
                 auth_result,
                 not download,
                 login_done,
+                workers,
             ),
         )
 

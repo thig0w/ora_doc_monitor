@@ -1,4 +1,5 @@
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -319,116 +320,209 @@ def _download_one(
         logger.warning(f"Download did not trigger for {text!r}: {e}")
 
 
+def _launch_browser(p, headed: bool):
+    """Launch Firefox with the project's standard options. Small helper shared by
+    the bootstrap login browser and each worker browser."""
+    return p.firefox.launch(
+        headless=not headed,
+        slow_mo=300 if headed else 0,
+        firefox_user_prefs={"pdfjs.disabled": True},
+    )
+
+
+def _new_context(browser, storage_state: dict | None = None):
+    """Create a download-enabled context, optionally hydrated with ``storage_state``."""
+    kwargs = {
+        "viewport": {"width": 1280, "height": 900},
+        "accept_downloads": True,
+    }
+    if storage_state is not None:
+        kwargs["storage_state"] = storage_state
+    return browser.new_context(**kwargs)
+
+
+def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
+    """Drive ``page`` through a single source and save the files it exposes.
+
+    Caller owns the browser/context lifecycle. Timeouts on one source are
+    logged and swallowed so the surrounding worker loop can move on to the
+    next one.
+    """
+    try:
+        _goto_doc(page, source["doc_id"])
+
+        # Best-effort check that we landed on the doc page.
+        try:
+            page.get_by_role(
+                "heading",
+                name=re.compile(source.get("desc", ""), re.I),
+            ).wait_for(timeout=25000)
+        except PlaywrightTimeoutError:
+            logger.warning(
+                f"Heading matching {source.get('desc')!r} not "
+                f"detected — continuing anyway"
+            )
+
+        links = execute_with_retry(
+            lambda s=source: _collect_links(page, s["doc_id"]),
+            retries=3,
+        )
+
+        logger.debug("Start downloading...")
+        for idx, info in enumerate(
+            progressbar.track(
+                links,
+                description=(f"Downloading files from docid {source['doc_id']}"),
+            )
+        ):
+            _download_one(page, context, idx, info, file_path)
+
+    except PlaywrightTimeoutError as e:
+        logger.error(f"Timeout for source {source['doc_id']}: {e!r} — skipping")
+
+
+def _bootstrap_storage_state(headed: bool) -> dict | None:
+    """Run the SSO flow once and return a ``storage_state`` dict.
+
+    A minimal one-off browser: log in, grab the cookies + localStorage the
+    worker threads need, then close. Returns ``None`` if anything in the
+    login path fails (missing credentials, Playwright error, etc.).
+    """
+    with sync_playwright() as p:
+        browser = None
+        try:
+            logger.debug("Launching bootstrap Firefox for login")
+            browser = _launch_browser(p, headed)
+            context = _new_context(browser)
+            page = context.new_page()
+            page.set_default_timeout(60000)
+
+            if not _login(page):
+                return None
+            return context.storage_state()
+        except Exception as e:
+            logger.exception(f"{type(e).__name__}: {e!r}")
+            return None
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception as e:
+                    logger.warning(f"Error closing bootstrap browser: {e}")
+
+
+def _worker_download(
+    source_queue: "queue.Queue[dict]",
+    storage_state: dict,
+    headed: bool,
+    worker_result: list,
+    worker_id: int,
+) -> None:
+    """Auth worker thread body: own Playwright + browser, shared queue.
+
+    Each worker launches its own browser hydrated with the shared
+    ``storage_state`` (no re-login) and then pulls the next pending source
+    from ``source_queue`` until it is empty. Work is dispatched on demand,
+    so fast workers pick up more docs while slow ones finish their current
+    one. On any fatal error ``worker_result[0]`` is flipped to ``False`` so
+    the caller can fail the whole run cleanly.
+    """
+    with sync_playwright() as p:
+        browser = None
+        try:
+            logger.debug(f"[worker-{worker_id}] launching Firefox")
+            browser = _launch_browser(p, headed)
+            context = _new_context(browser, storage_state=storage_state)
+            page = context.new_page()
+            page.set_default_timeout(60000)
+            while True:
+                try:
+                    source = source_queue.get_nowait()
+                except queue.Empty:
+                    break
+                _download_source(page, context, source)
+        except Exception as e:
+            logger.exception(f"[worker-{worker_id}] {type(e).__name__}: {e!r}")
+            worker_result[0] = False
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception as e:
+                    logger.warning(f"[worker-{worker_id}] error closing browser: {e}")
+
+
 def download_docs(
     sources: list[dict[str, str]],
     headed: bool = False,
     result: list | None = None,
     login_done: threading.Event | None = None,
+    workers: int = 2,
 ) -> None:
-    """Open Firefox via Playwright, log into MOS and download every source.
+    """Log into MOS once, then download every source in parallel workers.
 
-    Owns the full browser lifecycle: launches Firefox, creates a download-
-    enabled context, logs in once, and then iterates ``sources`` — each
-    entry is a dict with ``desc`` and ``doc_id`` keys — navigating to its
-    ``DocumentDisplay`` page and downloading every attached file into the
-    work folder.
+    Flow:
 
-    MUST run entirely on a single thread: Playwright's sync API binds to the
-    thread where ``sync_playwright()`` is started and its handles cannot
-    cross threads.
+    1. A bootstrap browser runs the SSO + TOTP flow once to produce a
+       ``storage_state`` (cookies + localStorage). It closes right after.
+    2. ``login_done`` is fired as soon as step 1 finishes — successfully or
+       not — so sibling threads (like the no-auth downloader) can move on.
+    3. Every source is pushed onto a shared queue. ``workers`` threads each
+       spin up their own Playwright + Firefox, hydrate the context with the
+       shared ``storage_state`` (skipping the login), and pull the next
+       pending source off the queue until it is empty. Work is dispatched
+       on demand, so a slow doc does not stall the other workers.
 
-    ``headed=True`` shows the browser window and adds a small ``slow_mo``
-    for debuggability. ``result`` is an optional single-element list used
-    as an out-parameter — it is flipped to ``[False]`` whenever the run
-    aborts early (missing credentials, unhandled exception) so callers can
-    skip any downstream steps that depend on a successful download.
+    Because Playwright's sync handles cannot cross threads, every browser is
+    created inside the thread that uses it. ``workers`` is clamped to
+    ``[1, len(sources)]``; setting it to ``1`` reproduces the sequential
+    behavior.
 
-    ``login_done`` is an optional :class:`threading.Event` that is set as
-    soon as the MOS login completes (successfully or not) so sibling threads
-    can hold off heavy network activity while SSO is still in progress. The
-    event is always set before the function returns, even on failure, so
-    waiters never hang.
+    ``result`` is an optional ``[bool]`` out-parameter that is flipped to
+    ``False`` when the bootstrap login fails or any worker errors out.
     """
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
         shutil.rmtree(file_path)
     os.makedirs(file_path, exist_ok=True)
 
-    with sync_playwright() as p:
-        browser = None
-        try:
-            logger.debug("Launching Firefox via Playwright")
-            browser = p.firefox.launch(
-                headless=not headed,
-                slow_mo=300 if headed else 0,
-                firefox_user_prefs={"pdfjs.disabled": True},
-            )
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 900},
-                accept_downloads=True,
-            )
-            page = context.new_page()
-            page.set_default_timeout(60000)
+    if not sources:
+        if login_done is not None:
+            login_done.set()
+        return
 
-            login_ok = _login(page)
-            if login_done is not None:
-                login_done.set()
-            if not login_ok:
-                if result is not None:
-                    result[0] = False
-                return
+    try:
+        storage_state = _bootstrap_storage_state(headed)
+    finally:
+        # Always release waiters, even if the bootstrap blew up.
+        if login_done is not None and not login_done.is_set():
+            login_done.set()
 
-            for source in sources:
-                try:
-                    _goto_doc(page, source["doc_id"])
+    if storage_state is None:
+        if result is not None:
+            result[0] = False
+        return
 
-                    # Best-effort check that we landed on the doc page.
-                    try:
-                        page.get_by_role(
-                            "heading",
-                            name=re.compile(source.get("desc", ""), re.I),
-                        ).wait_for(timeout=25000)
-                    except PlaywrightTimeoutError:
-                        logger.warning(
-                            f"Heading matching {source.get('desc')!r} not "
-                            f"detected — continuing anyway"
-                        )
+    worker_count = max(1, min(workers, len(sources)))
+    source_queue: queue.Queue = queue.Queue()
+    for s in sources:
+        source_queue.put(s)
+    worker_results = [[True] for _ in range(worker_count)]
 
-                    links = execute_with_retry(
-                        lambda s=source: _collect_links(page, s["doc_id"]),
-                        retries=3,
-                    )
+    threads = []
+    for i in range(worker_count):
+        t = threading.Thread(
+            target=_worker_download,
+            args=(source_queue, storage_state, headed, worker_results[i], i),
+            name=f"auth-worker-{i}",
+        )
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
 
-                    logger.debug("Start downloading...")
-                    for idx, info in enumerate(
-                        progressbar.track(
-                            links,
-                            description=(
-                                f"Downloading files from docid {source['doc_id']}"
-                            ),
-                        )
-                    ):
-                        _download_one(page, context, idx, info, file_path)
-
-                except PlaywrightTimeoutError as e:
-                    logger.error(
-                        f"Timeout for source {source['doc_id']}: {e!r} — skipping"
-                    )
-                    continue
-
-        except Exception as e:
-            logger.exception(f"{type(e).__name__}: {e!r}")
-            if result is not None:
-                result[0] = False
-        finally:
-            # Make sure waiters never hang if we aborted before/while logging in.
-            if login_done is not None and not login_done.is_set():
-                login_done.set()
-            if browser is not None:
-                try:
-                    browser.close()
-                except Exception as e:
-                    logger.warning(f"Error closing browser: {e}")
+    if result is not None and any(not r[0] for r in worker_results):
+        result[0] = False
 
 
 if __name__ == "__main__":
