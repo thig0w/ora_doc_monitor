@@ -236,24 +236,28 @@ def _collect_links(page: Page, source_id: str) -> list[dict]:
     return link_data
 
 
-def execute_with_retry(func, retries: int = 3):
+def execute_with_retry(func, retries: int = 3, on_retry=None):
     """Call ``func()`` up to ``retries`` times, retrying only on transient errors.
 
     Retries when :class:`NoValidLinksFound` is raised (Oracle's async rendering
     sometimes leaves the link list momentarily empty) and re-raises on the
-    last attempt. Any other exception is propagated immediately — callers
-    should not rely on this helper to swallow generic failures.
+    last attempt. ``on_retry`` runs between attempts so the caller can recover
+    page state (e.g. re-navigate) before the next call. Any other exception is
+    propagated immediately — callers should not rely on this helper to swallow
+    generic failures.
     """
     for retry in range(1, retries + 1):
         try:
             return func()
         except NoValidLinksFound as e:
-            if logger:
-                logger.warning(f"{e} — retrying ({retry}/{retries})")
+            logger.warning(f"{e} — retrying ({retry}/{retries})")
             if retry == retries:
                 raise
-        except Exception:
-            raise
+            if on_retry is not None:
+                try:
+                    on_retry()
+                except Exception as re_err:
+                    logger.warning(f"on_retry hook failed: {re_err!r}")
 
 
 def _filename_from_url(url: str) -> str:
@@ -366,6 +370,7 @@ def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
         links = execute_with_retry(
             lambda s=source: _collect_links(page, s["doc_id"]),
             retries=3,
+            on_retry=lambda s=source: _goto_doc(page, s["doc_id"]),
         )
 
         logger.debug("Start downloading...")

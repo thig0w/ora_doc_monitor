@@ -13,20 +13,12 @@
             "doc_id": "2899701.1"
         },
         {
-            "desc": "RDS func docs",
-            "doc_id": "2899701.1"
-        },
-        {
             "desc": "POM func docs",
             "doc_id": "2815461.1"
         },
         {
             "desc": "blueprint func docs",
             "doc_id": "2677553.1"
-        },
-        {
-            "desc": "Advanced Release Notes",
-            "doc_id": "2704051.1"
         }
     ],
     "noauth_req": [
@@ -111,6 +103,10 @@
         {
             "desc": "Extensions docs - error when trying to download",
             "doc_id": "2978473.1"
+        },
+        {
+            "desc": "Advanced Release Notes - error when trying to download",
+            "doc_id": "2704051.1"
         },
         {
             "desc": "Data Models",

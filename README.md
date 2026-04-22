@@ -4,10 +4,11 @@ A CLI tool for monitoring Oracle Retail documentation updates. It downloads PDFs
 
 ## Setup
 
-**Requirements:** Python >= 3.11, [UV](https://github.com/astral-sh/uv), Firefox, and [`geckodriver`](https://github.com/mozilla/geckodriver/releases) on your `PATH`.
+**Requirements:** Python >= 3.11 and [UV](https://github.com/astral-sh/uv). Firefox is installed automatically by Playwright — no system Firefox or `geckodriver` needed.
 
 ```bash
 uv sync
+uv run playwright install firefox
 ```
 
 Create a `.env` file in the project root — `python-dotenv` loads it automatically:
@@ -48,13 +49,16 @@ python -m source.cli --headed
 
 # Download only, skip the diff step
 python -m source.cli --download
+
+# Tune parallel auth-doc workers (default: 2, shares a single login session)
+python -m source.cli --workers 4
 ```
 
 ## How It Works
 
 1. **Download** — Fetches PDFs in parallel from two source types into temporary `_work` folders:
-   - **MOS (authenticated):** Uses Selenium to log into Oracle Support with 2FA, then downloads PDFs attached to knowledge articles into `func_docs_work/`.
-   - **Public docs:** Scrapes PDF links from public `docs.oracle.com` pages and downloads them via HTTP into `<name>_work/`.
+   - **MOS (authenticated):** Uses Playwright + Firefox to log into Oracle Support with 2FA once, then exports the authenticated session to N parallel worker browsers that pull docs from a shared queue into `func_docs_work/`. Worker count is controlled by `--workers` (default: 2).
+   - **Public docs:** Scrapes PDF links from public `docs.oracle.com` pages and downloads them via HTTP into `<name>_work/`. Held back until MOS login completes, to keep the SSO handshake from fighting network-heavy public downloads.
 2. **Diff (decoupled)** — Each source type runs its own diff immediately after its own download completes, without waiting for the other. Public doc diffs finish well before the slower MOS download completes.
 3. **Checksum** — Generates `000_checksumfile.md` inside each work folder (MD5 hash per file, `000_checksumfile.md` itself excluded).
 4. **Diff** — Compares hash sets between the work folder and the base folder's stored `000_checksumfile.md`. Only genuine content changes are reported — renamed-but-unchanged files are ignored. Changed documents are copied to a timestamped folder (`df_YYYYMMDDHHMM/`), with a Rich-formatted summary table.

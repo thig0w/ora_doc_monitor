@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 `ora_doc_monitor` is a Python CLI tool that monitors and downloads Oracle documentation from two sources:
-- **MOS (My Oracle Support):** Requires authenticated Selenium-based browser automation with 2FA
+- **MOS (My Oracle Support):** Requires authenticated Playwright-driven Firefox automation with 2FA
 - **Public Oracle docs:** No authentication, uses `requests` + BeautifulSoup to scrape and download PDFs
 
 After downloading, it diffs old vs. new versions and copies changed files to a timestamped output folder.
@@ -28,6 +28,7 @@ python -m source.cli --auth_docs      # MOS authenticated docs only
 python -m source.cli --no_auth_docs   # Public docs only
 python -m source.cli --headed         # Show browser window (default: headless)
 python -m source.cli --download       # Skip diff comparison after download
+python -m source.cli --workers 4      # Parallel auth-doc workers (default: 2)
 ```
 
 ## Linting & Formatting
@@ -55,8 +56,8 @@ Values starting with `op://` are resolved at runtime via the `op` CLI (1Password
 
 All source code lives in `source/`:
 
-- **`cli.py`** — Click-based entry point. Spawns two threads (auth docs + public docs) in parallel. Each thread runs its own download then immediately triggers its own diff — auth and noauth diffs are fully decoupled and run as soon as their respective downloads finish.
-- **`doc_extractor.py`** — Selenium/Firefox automation: logs into MOS with TOTP 2FA, downloads PDFs. Includes retry logic (`execute_with_retry`) and a `watchdog()` to force-kill frozen Firefox processes. `load_page_and_collect_links()` returns `list[dict]` (keys: `href`, `data_href`, `text`) — attributes are extracted atomically via a single JS call to avoid `StaleElementReferenceException` from Oracle JET re-renders. `execute_with_retry` retries on both `NoValidLinksFound` and `StaleElementReferenceException`.
+- **`cli.py`** — Click-based entry point. Spawns two threads (auth docs + public docs) in parallel. Each thread runs its own download then immediately triggers its own diff — auth and noauth diffs are fully decoupled and run as soon as their respective downloads finish. A `threading.Event` (`login_done`) gates the noauth thread until MOS login finishes, so the two flows do not fight for browser CPU during the SSO handshake.
+- **`auth_extractor.py`** — Playwright/Firefox automation: logs into MOS with TOTP 2FA, then downloads PDFs in parallel workers. A single bootstrap browser runs the SSO flow once and exports a `storage_state` (cookies + localStorage); N worker threads each launch their own Firefox, hydrate the context with that `storage_state`, and pull the next source off a shared `queue.Queue` until it is empty. Work is dispatched on demand — slow docs do not stall the other workers. `_collect_links()` returns `list[dict]` (keys: `href`, `data_href`, `text`) via a single `page.evaluate` call to avoid races against Oracle JET re-renders. `execute_with_retry` retries on `NoValidLinksFound`.
 - **`url_extractor.py`** — Downloads PDFs from public Oracle documentation pages by scraping HTML links with BeautifulSoup.
 - **`diff_docs.py`** — Compares work vs. base folders by MD5 hash (not filename), copies diffs to `df_YYYYMMDDHHMM/`, and renders a Rich table (LEFT = new, RIGHT = removed). Renamed-but-unchanged files are ignored. Syncs base folder by removing/moving only changed files, then stores `000_checksumfile.md` in the base folder for the next run. Exposes `diff_auth_folders()` and `diff_noauth_folders()` as separate entry points.
 - **`interface.py`** — Shared `logger` (loguru + Rich handler), `progressbar` (Rich Progress), and `console` (Rich Console) used across all modules.
@@ -71,7 +72,11 @@ All source code lives in `source/`:
 
 ### Key Design Patterns
 
-- **Oracle JET detection:** `doc_extractor.py` waits for Oracle's JavaScript framework to finish rendering before interacting with pages. Downloadable file links are identified by CSS selector `a[data-oce-meta-data], a[data-ucm-meta-data]` — two attribute types are used by MOS depending on the asset backend (OCM vs UCM).
-- **Stale element avoidance:** After finding link elements, all attributes (`href`, `data-href`, text) are extracted in a single `execute_script` call before Oracle JET can re-render the DOM. The download loop works with plain dicts. For `javascript:` links (Oracle JET session-authenticated downloads), the element is re-found fresh by index immediately before each `.click()` — `window.open(data_href)` cannot be used here because the download token is only issued through the JET click handler.
-- **Firefox PDF auto-save:** WebDriver preferences configure Firefox to auto-download PDFs without dialogs.
-- **No test suite** currently exists in this project.
+- **Oracle JET detection:** `auth_extractor.py` waits via `page.wait_for_function` for Oracle's JavaScript framework to populate anchor `href` values before interacting with pages. Downloadable file links are identified by CSS selector `a[data-oce-meta-data], a[data-ucm-meta-data]` — two attribute types are used by MOS depending on the asset backend (OCM vs UCM).
+- **Stale element avoidance:** After finding link elements, all attributes (`href`, `data-href`, text) are extracted in a single `page.evaluate` call before Oracle JET can re-render the DOM. The download loop works with plain dicts. For `javascript:` hrefs (Oracle JET session-authenticated downloads), the anchor is re-queried fresh by index immediately before `.click()` inside a `page.expect_download` block — `context.request.get(data_href)` cannot be used here because the download token is only issued through the JET click handler. Plain URLs use `context.request.get()` so browser session cookies carry over without opening a new tab.
+- **Firefox PDF auto-save:** Playwright's `firefox_user_prefs={"pdfjs.disabled": True}` forces PDFs to download instead of rendering inline.
+- **Playwright thread-binding:** `sync_playwright()` handles are bound to the thread that created them, so every browser (bootstrap + each worker) is launched inside its own thread.
+- **Shared session across workers:** The bootstrap browser's `storage_state` (cookies + localStorage) is serialized in the main thread and passed to each worker, which rehydrates a fresh context with it — avoiding the cost and risk of N parallel SSO flows.
+- **Dynamic work dispatch:** Auth workers pull from a shared `queue.Queue` rather than a pre-partitioned slice, so a slow or failing doc on one worker does not leave the others idle.
+- **Intermittent `op read` handling:** `_resolve_secret` retries `op read` with linear backoff on non-zero exit and logs stderr each time.
+- **Test suite:** `pytest` under `tests/` — config in `pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["source"]`). Run with `uv run pytest -q`.
