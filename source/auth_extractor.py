@@ -35,39 +35,77 @@ SSO_DOMAIN_OCID = (
 DOC_DISPLAY_URL = "https://support.oracle.com/epmos/faces/DocumentDisplay?id="
 
 
-def _resolve_secret(
-    value: str | None, retries: int = 3, backoff: float = 1.5
-) -> str | None:
-    """Resolve a credential value, transparently dereferencing 1Password refs.
+def _resolve_secrets(
+    values: dict[str, str | None], retries: int = 3, backoff: float = 1.5
+) -> dict[str, str | None]:
+    """Resolve a dict of credential values, batching 1Password refs into one call.
 
-    If ``value`` is an ``op://vault/item/field`` reference, shells out to the
-    ``op`` CLI to read the secret. Plain strings (and ``None``) are returned
-    as-is so the caller can mix stored secrets and inline values freely.
+    Entries whose value is ``None`` or not an ``op://vault/item/field``
+    reference pass through untouched. All ``op://`` refs in ``values`` are
+    collected and resolved in a single ``op inject`` subprocess call, so the
+    cost of talking to 1Password (session re-auth, biometric prompt, network
+    round-trip) is paid once per batch instead of once per variable.
+
+    The template sent to ``op inject`` is a ``.env``-style file — one
+    ``KEY={{ op://... }}`` line per ref — which is the canonical 1Password
+    template format. The response is parsed line-by-line, splitting on the
+    first ``=``; this handles values that themselves contain ``=`` (e.g. a
+    password with that character) without corrupting them.
+
+    Values are assumed to be single-line (true for Oracle SSO credentials
+    and Base32 TOTP keys). A multi-line secret would break the line split,
+    so this helper should not be used for PEM keys or similar.
 
     The ``op`` CLI fails intermittently (session re-auth, biometric timeout,
-    throttling when several reads happen in a row), so non-zero exits are
-    retried with linear backoff. The CLI's stderr is logged on every failure
-    so a persistent error is visible before the final raise.
+    throttling), so non-zero exits are retried with linear backoff. The CLI's
+    stderr is logged on every failure so a persistent error is visible before
+    the final raise.
     """
-    if not (value and value.startswith("op://")):
-        return value
+    op_refs = {k: v for k, v in values.items() if v and v.startswith("op://")}
+    resolved: dict[str, str | None] = {
+        k: v for k, v in values.items() if k not in op_refs
+    }
+    if not op_refs:
+        return resolved
+
+    keys = list(op_refs.keys())
+    template = "\n".join(f"{k}={{{{ {op_refs[k]} }}}}" for k in keys)
 
     last_err: subprocess.CalledProcessError | None = None
     for attempt in range(1, retries + 1):
+        logger.debug(f"Opening 1pass subprocess for {keys}")
         result = subprocess.run(
-            ["op", "read", value], capture_output=True, text=True, check=False
+            ["op", "inject"],
+            input=template,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            parsed: dict[str, str] = {}
+            for line in result.stdout.splitlines():
+                if not line or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k in op_refs:
+                    parsed[k] = v
+            missing = [k for k in keys if k not in parsed]
+            if missing:
+                raise RuntimeError(
+                    f"op inject did not return values for {missing} — "
+                    f"template/output mismatch"
+                )
+            resolved.update(parsed)
+            return resolved
 
         stderr = (result.stderr or "").strip()
         logger.warning(
-            f"op read failed for {value!r} (attempt {attempt}/{retries}, "
+            f"op inject failed for {keys} (attempt {attempt}/{retries}, "
             f"exit {result.returncode}): {stderr or '<no stderr>'}"
         )
         last_err = subprocess.CalledProcessError(
             result.returncode,
-            ["op", "read", value],
+            ["op", "inject"],
             output=result.stdout,
             stderr=result.stderr,
         )
@@ -97,9 +135,17 @@ def _login(page: Page) -> bool:
     are missing. All other failure modes raise the underlying Playwright
     exception to the caller.
     """
-    mos_user = _resolve_secret(os.getenv("MOSUSER"))
-    mos_pass = _resolve_secret(os.getenv("MOSPASS"))
-    mos_mfa_raw = _resolve_secret(os.getenv("MOSMFAKEY"))
+    logger.debug("Resolving secrets")
+    secrets = _resolve_secrets(
+        {
+            "MOSUSER": os.getenv("MOSUSER"),
+            "MOSPASS": os.getenv("MOSPASS"),
+            "MOSMFAKEY": os.getenv("MOSMFAKEY"),
+        }
+    )
+    mos_user = secrets["MOSUSER"]
+    mos_pass = secrets["MOSPASS"]
+    mos_mfa_raw = secrets["MOSMFAKEY"]
 
     if mos_user is None or mos_pass is None or mos_mfa_raw is None:
         logger.critical(
@@ -189,18 +235,59 @@ def _goto_doc(page: Page, doc_id: str) -> None:
         logger.warning(f"networkidle timed out for {doc_id}: {e} — continuing")
 
 
+def _wait_for_jet_ready(page: Page, source_id: str) -> None:
+    """Block until Oracle JET finished rendering the doc page's content.
+
+    JET ships two first-class readiness signals that fire strictly after
+    ``networkidle`` — waiting on them is the proven way (copied from the
+    Selenium version) to avoid catching the DOM mid-render:
+
+    1. ``oj.Context.getPageContext().getBusyContext().isReady()`` — JET's
+       own busy context flips to ready once all its async operations
+       (data binding, component bootstrap, deferred fetches) have settled.
+    2. ``oj-vb-content.oj-complete`` — the Virtual Builder content subtree
+       picks up the ``oj-complete`` CSS class only after its children are
+       fully mounted. Some doc pages don't use ``oj-vb-content`` at all, so
+       this wait is best-effort.
+    """
+    logger.debug("Waiting for Oracle JET BusyContext to be ready...")
+    try:
+        page.wait_for_function(
+            """() => window.oj
+                && oj.Context.getPageContext().getBusyContext().isReady()""",
+            timeout=60000,
+        )
+    except PlaywrightTimeoutError as e:
+        logger.warning(f"JET BusyContext not ready for {source_id}: {e} — continuing")
+
+    logger.debug("Waiting for JET content subtree (oj-vb-content.oj-complete)...")
+    try:
+        page.locator("oj-vb-content.oj-complete").first.wait_for(
+            state="attached", timeout=45000
+        )
+    except PlaywrightTimeoutError:
+        logger.debug(
+            f"oj-vb-content.oj-complete not seen for {source_id} — "
+            f"page may not use it, continuing"
+        )
+
+
 def _collect_links(page: Page, source_id: str) -> list[dict]:
     """Collect every downloadable link on the current MOS doc page.
 
-    Waits until the ``a[data-oce-meta-data], a[data-ucm-meta-data]`` anchors
-    have non-empty ``href`` values, then extracts ``href``, ``data_href``
-    and text for each one in a single ``page.evaluate`` call so the DOM
-    cannot re-render between individual reads.
+    Blocks first on :func:`_wait_for_jet_ready` so Oracle JET has committed
+    to its final DOM, then waits until the
+    ``a[data-oce-meta-data], a[data-ucm-meta-data]`` anchors have non-empty
+    ``href`` values, then extracts ``href``, ``data_href`` and text for each
+    one in a single ``page.evaluate`` call so the DOM cannot re-render
+    between individual reads.
 
     Raises :class:`NoValidLinksFound` if, after the wait, no anchor has a
     usable ``href`` — callers retry this case via :func:`execute_with_retry`.
     Returns the raw list of dicts (one per anchor).
     """
+    _wait_for_jet_ready(page, source_id)
+
     logger.debug("Waiting for document links to populate...")
     page.wait_for_function(
         """() => {
@@ -345,6 +432,30 @@ def _new_context(browser, storage_state: dict | None = None):
     return browser.new_context(**kwargs)
 
 
+def _load_doc_page(page: Page, source: dict) -> None:
+    """Navigate to ``source`` and wait until the JET doc page has actually rendered.
+
+    ``_goto_doc`` alone only guarantees ``networkidle``, which fires long
+    before Oracle JET swaps the loading skeleton out for the real DOM — so
+    reading anchors right after it often catches the page mid-render. Here
+    we additionally wait for the doc's ``desc`` heading to become visible,
+    which is a much later signal that the content container has mounted.
+    The heading wait is best-effort: we log and continue if it times out so
+    docs whose ``desc`` does not exactly match the rendered heading still
+    progress.
+    """
+    _goto_doc(page, source["doc_id"])
+    try:
+        page.get_by_role(
+            "heading",
+            name=re.compile(source.get("desc", ""), re.I),
+        ).wait_for(timeout=25000)
+    except PlaywrightTimeoutError:
+        logger.warning(
+            f"Heading matching {source.get('desc')!r} not detected — continuing anyway"
+        )
+
+
 def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
     """Drive ``page`` through a single source and save the files it exposes.
 
@@ -353,24 +464,12 @@ def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
     next one.
     """
     try:
-        _goto_doc(page, source["doc_id"])
-
-        # Best-effort check that we landed on the doc page.
-        try:
-            page.get_by_role(
-                "heading",
-                name=re.compile(source.get("desc", ""), re.I),
-            ).wait_for(timeout=25000)
-        except PlaywrightTimeoutError:
-            logger.warning(
-                f"Heading matching {source.get('desc')!r} not "
-                f"detected — continuing anyway"
-            )
+        _load_doc_page(page, source)
 
         links = execute_with_retry(
             lambda s=source: _collect_links(page, s["doc_id"]),
             retries=3,
-            on_retry=lambda s=source: _goto_doc(page, s["doc_id"]),
+            on_retry=lambda s=source: _load_doc_page(page, s),
         )
 
         logger.debug("Start downloading...")
