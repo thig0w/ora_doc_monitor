@@ -135,6 +135,14 @@ def _login(page: Page) -> bool:
     are missing. All other failure modes raise the underlying Playwright
     exception to the caller.
     """
+    # Kick off the sign-in page navigation first with an early-return
+    # ``wait_until="commit"`` — it unblocks as soon as the first bytes land,
+    # leaving the browser to render the page in the background while we go
+    # talk to 1Password. The subsequent ``wait_for(state="visible")`` on the
+    # sign-in button absorbs whatever render time is left, so there's no race.
+    logger.debug("Opening MOS sign-in page")
+    page.goto("https://support.oracle.com/signin/", wait_until="commit")
+
     logger.debug("Resolving secrets")
     secrets = _resolve_secrets(
         {
@@ -156,9 +164,6 @@ def _login(page: Page) -> bool:
     mos_mfa_key = mos_mfa_raw.replace(" ", "")
 
     step_timeout = 45000
-
-    logger.debug("Opening MOS sign-in page")
-    page.goto("https://support.oracle.com/signin/", wait_until="domcontentloaded")
 
     # Each screen transition is guarded by a wait_for on the next screen's
     # distinctive element. JET does SPA-style view switches without URL
@@ -485,60 +490,80 @@ def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
         logger.error(f"Timeout for source {source['doc_id']}: {e!r} — skipping")
 
 
-def _bootstrap_storage_state(headed: bool) -> dict | None:
-    """Run the SSO flow once and return a ``storage_state`` dict.
-
-    A minimal one-off browser: log in, grab the cookies + localStorage the
-    worker threads need, then close. Returns ``None`` if anything in the
-    login path fails (missing credentials, Playwright error, etc.).
-    """
-    with sync_playwright() as p:
-        browser = None
-        try:
-            logger.debug("Launching bootstrap Firefox for login")
-            browser = _launch_browser(p, headed)
-            context = _new_context(browser)
-            page = context.new_page()
-            page.set_default_timeout(60000)
-
-            if not _login(page):
-                return None
-            return context.storage_state()
-        except Exception as e:
-            logger.exception(f"{type(e).__name__}: {e!r}")
-            return None
-        finally:
-            if browser is not None:
-                try:
-                    browser.close()
-                except Exception as e:
-                    logger.warning(f"Error closing bootstrap browser: {e}")
-
-
 def _worker_download(
     source_queue: "queue.Queue[dict]",
-    storage_state: dict,
+    login_state: dict,
+    login_done_internal: threading.Event,
+    external_login_done: threading.Event | None,
     headed: bool,
     worker_result: list,
     worker_id: int,
+    is_login_worker: bool,
 ) -> None:
     """Auth worker thread body: own Playwright + browser, shared queue.
 
-    Each worker launches its own browser hydrated with the shared
-    ``storage_state`` (no re-login) and then pulls the next pending source
-    from ``source_queue`` until it is empty. Work is dispatched on demand,
-    so fast workers pick up more docs while slow ones finish their current
-    one. On any fatal error ``worker_result[0]`` is flipped to ``False`` so
-    the caller can fail the whole run cleanly.
+    Worker-0 (``is_login_worker=True``) runs the MOS SSO + TOTP flow itself
+    in its own browser, publishes the resulting ``storage_state`` onto the
+    shared ``login_state`` dict, and keeps that **same browser** open to
+    drain the download queue — no second browser launch for login. Workers
+    1..N-1 launch their browser immediately (overlapping the SSO
+    handshake) then block on ``login_done_internal``; once login has
+    finished they rehydrate a context with the published ``storage_state``
+    and join the download loop.
+
+    ``external_login_done`` is the CLI's noauth gate. Only worker-0 sets
+    it, and it fires as soon as ``_login`` returns (success or failure),
+    so the noauth downloader is released the moment SSO finishes — not
+    after the auth download loop drains.
+
+    On any fatal error ``worker_result[0]`` is flipped to ``False``. Login
+    failures are signalled via ``login_state["success"]`` and do not flip
+    the waiting workers' results — they exit cleanly.
     """
     with sync_playwright() as p:
         browser = None
         try:
             logger.debug(f"[worker-{worker_id}] launching Firefox")
             browser = _launch_browser(p, headed)
-            context = _new_context(browser, storage_state=storage_state)
-            page = context.new_page()
-            page.set_default_timeout(60000)
+
+            if is_login_worker:
+                context = _new_context(browser)
+                page = context.new_page()
+                page.set_default_timeout(60000)
+                try:
+                    ok = _login(page)
+                    if ok:
+                        login_state["storage_state"] = context.storage_state()
+                        login_state["success"] = True
+                except Exception as e:
+                    logger.exception(
+                        f"[worker-{worker_id}] login failed: {type(e).__name__}: {e!r}"
+                    )
+                finally:
+                    # Release waiters unconditionally — on success, failure,
+                    # or exception — or sibling workers and the noauth
+                    # thread hang forever.
+                    login_done_internal.set()
+                    if (
+                        external_login_done is not None
+                        and not external_login_done.is_set()
+                    ):
+                        external_login_done.set()
+                if not login_state["success"]:
+                    worker_result[0] = False
+                    return
+            else:
+                login_done_internal.wait()
+                if not login_state["success"]:
+                    # Login failed in worker-0; exit cleanly without
+                    # flipping our own result flag.
+                    return
+                context = _new_context(
+                    browser, storage_state=login_state["storage_state"]
+                )
+                page = context.new_page()
+                page.set_default_timeout(60000)
+
             while True:
                 try:
                     source = source_queue.get_nowait()
@@ -548,6 +573,13 @@ def _worker_download(
         except Exception as e:
             logger.exception(f"[worker-{worker_id}] {type(e).__name__}: {e!r}")
             worker_result[0] = False
+            # If worker-0 blew up before the login `finally` ran (e.g.
+            # browser launch itself failed), other workers would deadlock.
+            # Release them now.
+            if is_login_worker and not login_done_internal.is_set():
+                login_done_internal.set()
+                if external_login_done is not None and not external_login_done.is_set():
+                    external_login_done.set()
         finally:
             if browser is not None:
                 try:
@@ -567,23 +599,26 @@ def download_docs(
 
     Flow:
 
-    1. A bootstrap browser runs the SSO + TOTP flow once to produce a
-       ``storage_state`` (cookies + localStorage). It closes right after.
-    2. ``login_done`` is fired as soon as step 1 finishes — successfully or
-       not — so sibling threads (like the no-auth downloader) can move on.
-    3. Every source is pushed onto a shared queue. ``workers`` threads each
-       spin up their own Playwright + Firefox, hydrate the context with the
-       shared ``storage_state`` (skipping the login), and pull the next
-       pending source off the queue until it is empty. Work is dispatched
-       on demand, so a slow doc does not stall the other workers.
+    1. Every source is pushed onto a shared queue.
+    2. ``worker_count`` threads spin up their own Playwright + Firefox in
+       parallel. Worker-0 runs the SSO + TOTP flow in its browser and
+       publishes the resulting ``storage_state`` on a shared dict; its
+       browser stays open and is reused to process the queue. Workers
+       1..N-1 launch their browser during login (overlapping the SSO
+       handshake), then hydrate a context with the shared state once
+       login finishes and join the queue. All workers pull the next
+       pending source on demand, so a slow doc does not stall the others.
+    3. ``login_done`` fires as soon as the SSO flow in worker-0 finishes
+       (success or failure), releasing the sibling noauth thread right
+       away instead of waiting for the download loop to drain.
 
     Because Playwright's sync handles cannot cross threads, every browser is
     created inside the thread that uses it. ``workers`` is clamped to
     ``[1, len(sources)]``; setting it to ``1`` reproduces the sequential
-    behavior.
+    behavior (single browser, login + downloads serially).
 
     ``result`` is an optional ``[bool]`` out-parameter that is flipped to
-    ``False`` when the bootstrap login fails or any worker errors out.
+    ``False`` when login fails or any worker errors out.
     """
     # Reset work folder for a clean download
     if os.path.isdir(file_path):
@@ -595,17 +630,8 @@ def download_docs(
             login_done.set()
         return
 
-    try:
-        storage_state = _bootstrap_storage_state(headed)
-    finally:
-        # Always release waiters, even if the bootstrap blew up.
-        if login_done is not None and not login_done.is_set():
-            login_done.set()
-
-    if storage_state is None:
-        if result is not None:
-            result[0] = False
-        return
+    login_state: dict = {"storage_state": None, "success": False}
+    login_done_internal = threading.Event()
 
     worker_count = max(1, min(workers, len(sources)))
     source_queue: queue.Queue = queue.Queue()
@@ -617,7 +643,16 @@ def download_docs(
     for i in range(worker_count):
         t = threading.Thread(
             target=_worker_download,
-            args=(source_queue, storage_state, headed, worker_results[i], i),
+            args=(
+                source_queue,
+                login_state,
+                login_done_internal,
+                login_done if i == 0 else None,
+                headed,
+                worker_results[i],
+                i,
+                i == 0,
+            ),
             name=f"auth-worker-{i}",
         )
         threads.append(t)
@@ -625,7 +660,15 @@ def download_docs(
     for t in threads:
         t.join()
 
-    if result is not None and any(not r[0] for r in worker_results):
+    # Safety net: if worker-0 never started or crashed before the login
+    # `finally` fired (extremely rare), release the external gate now so
+    # the noauth thread is not left hanging.
+    if login_done is not None and not login_done.is_set():
+        login_done.set()
+
+    if result is not None and (
+        not login_state["success"] or any(not r[0] for r in worker_results)
+    ):
         result[0] = False
 
 
