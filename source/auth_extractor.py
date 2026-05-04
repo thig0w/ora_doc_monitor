@@ -35,6 +35,20 @@ SSO_DOMAIN_OCID = (
 DOC_DISPLAY_URL = "https://support.oracle.com/epmos/faces/DocumentDisplay?id="
 
 
+def _wid() -> str:
+    """Return ``[worker-N] `` when called from an auth-worker thread, else ``""``.
+
+    Threads spawned by :func:`download_docs` are named ``auth-worker-N``, so
+    helper functions reachable from a worker can tag their log lines with the
+    same ``[worker-N]`` prefix used directly inside :func:`_worker_download`
+    without having to thread ``worker_id`` through every signature.
+    """
+    name = threading.current_thread().name
+    if name.startswith("auth-worker-"):
+        return f"[worker-{name.removeprefix('auth-worker-')}] "
+    return ""
+
+
 def _resolve_secrets(
     values: dict[str, str | None], retries: int = 3, backoff: float = 1.5
 ) -> dict[str, str | None]:
@@ -73,7 +87,7 @@ def _resolve_secrets(
 
     last_err: subprocess.CalledProcessError | None = None
     for attempt in range(1, retries + 1):
-        logger.debug(f"Opening 1pass subprocess for {keys}")
+        logger.debug(f"{_wid()}Opening 1pass subprocess for {keys}")
         result = subprocess.run(
             ["op", "inject"],
             input=template,
@@ -100,7 +114,7 @@ def _resolve_secrets(
 
         stderr = (result.stderr or "").strip()
         logger.warning(
-            f"op inject failed for {keys} (attempt {attempt}/{retries}, "
+            f"{_wid()}op inject failed for {keys} (attempt {attempt}/{retries}, "
             f"exit {result.returncode}): {stderr or '<no stderr>'}"
         )
         last_err = subprocess.CalledProcessError(
@@ -140,10 +154,10 @@ def _login(page: Page) -> bool:
     # leaving the browser to render the page in the background while we go
     # talk to 1Password. The subsequent ``wait_for(state="visible")`` on the
     # sign-in button absorbs whatever render time is left, so there's no race.
-    logger.debug("Opening MOS sign-in page")
+    logger.debug(f"{_wid()}Opening MOS sign-in page")
     page.goto("https://support.oracle.com/signin/", wait_until="commit")
 
-    logger.debug("Resolving secrets")
+    logger.debug(f"{_wid()}Resolving secrets")
     secrets = _resolve_secrets(
         {
             "MOSUSER": os.getenv("MOSUSER"),
@@ -157,7 +171,7 @@ def _login(page: Page) -> bool:
 
     if mos_user is None or mos_pass is None or mos_mfa_raw is None:
         logger.critical(
-            "Please set MOSUSER, MOSPASS and MOSMFAKEY environment variables!"
+            f"{_wid()}Please set MOSUSER, MOSPASS and MOSMFAKEY environment variables!"
         )
         return False
 
@@ -171,47 +185,74 @@ def _login(page: Page) -> bool:
     # waits are the barrier that actually matters here.
     sign_in_btn = page.get_by_role("button", name="Sign in with your commercial")
     sign_in_btn.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Clicking 'Sign in with your commercial'")
+    logger.debug(f"{_wid()}Clicking 'Sign in with your commercial'")
     sign_in_btn.click()
 
     tenancy_field = page.get_by_role("textbox", name="Tenancy")
     tenancy_field.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Submitting tenancy")
+    logger.debug(f"{_wid()}Submitting tenancy")
     tenancy_field.fill("myoraclesupport")
     page.get_by_role("button", name="Continue").click()
 
     domain_dropdown = page.locator('[data-test-id="identity-domain-dropdown"]')
     domain_dropdown.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Selecting identity domain")
+    logger.debug(f"{_wid()}Selecting identity domain")
     domain_dropdown.select_option(SSO_DOMAIN_OCID)
     page.get_by_role("button", name="Next").click()
 
     username_field = page.get_by_role("textbox", name="Username or email")
     username_field.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Submitting username")
+    logger.debug(f"{_wid()}Submitting username")
     username_field.fill(mos_user)
     page.get_by_role("button", name="Next").click()
 
     pwd_field = page.locator('[id="idcs-auth-pwd-input|input"]')
     pwd_field.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Submitting password")
+    logger.debug(f"{_wid()}Submitting password")
     pwd_field.fill(mos_pass)
     page.get_by_role("button", name="Sign In").click()
 
     passcode_field = page.get_by_role("textbox", name="Passcode")
     passcode_field.wait_for(state="visible", timeout=step_timeout)
-    logger.debug("Submitting 2fa")
+    logger.debug(f"{_wid()}Submitting 2fa")
     passcode_field.fill(TOTP(mos_mfa_key).now())
     page.get_by_role("button", name="Verify").click()
 
-    logger.debug("Waiting for post-login redirect")
+    logger.debug(f"{_wid()}Waiting for post-login redirect")
     page.wait_for_url("**/support.oracle.com/**", timeout=60000)
-    # Oracle fires a few more redirects right after the SSO handshake lands —
-    # networkidle waits deterministically for that cascade to settle.
+
+    # The post-login redirect cascade is long and `networkidle` fires on any
+    # 500 ms lull, so it can return mid-cascade — before MOS has finished
+    # planting every session cookie. Worker-0 keeps using its live context
+    # and silently picks up the late cookies, but the storage_state snapshot
+    # we share with other workers is captured right after this wait, so any
+    # cookie that arrives late is missing from it and hydrating workers get
+    # bounced to /signin/ on their first /epmos/ request.
+    #
+    # Instead, wait for an element that only renders once the final landing
+    # page (https://support.oracle.com/support/) has fully mounted: the
+    # account menu button. When it is visible, the cascade is genuinely
+    # done and storage_state is safe to capture.
+    logger.debug(f"{_wid()}Waiting for MOS landing account menu button")
     try:
-        page.wait_for_load_state("networkidle", timeout=45000)
+        page.locator("#mc-id-sptemplate-account-menu-btn").wait_for(
+            state="visible", timeout=120000
+        )
     except PlaywrightTimeoutError as e:
-        logger.warning(f"Post-login networkidle timed out: {e} — continuing")
+        logger.warning(
+            f"{_wid()}Account menu button not visible after login "
+            f"({page.url}): {e} — continuing"
+        )
+
+    # Eager sanity check: if MOS bounced us back to the welcome page, the SSO
+    # didn't actually stick. Failing here keeps a half-authenticated
+    # storage_state from being shared with the other workers.
+    if "/signin" in page.url or "login.oracle.com" in page.url:
+        logger.error(
+            f"{_wid()}Post-login URL still on auth page: {page.url} — "
+            "treating as login failure"
+        )
+        return False
     return True
 
 
@@ -226,18 +267,18 @@ def _goto_doc(page: Page, doc_id: str) -> None:
     left to confirm whether the page actually rendered.
     """
     target = DOC_DISPLAY_URL + doc_id
-    logger.debug(f"Navigating to DocumentDisplay?id={doc_id}")
+    logger.debug(f"{_wid()}Navigating to DocumentDisplay?id={doc_id}")
     try:
         page.goto(target, wait_until="commit", timeout=60000)
     except PlaywrightError as e:
         if "NS_BINDING_ABORTED" in str(e):
-            logger.debug(f"Goto aborted by Oracle redirect — continuing: {e}")
+            logger.debug(f"{_wid()}Goto aborted by Oracle redirect — continuing: {e}")
         else:
             raise
     try:
         page.wait_for_load_state("networkidle", timeout=45000)
     except PlaywrightTimeoutError as e:
-        logger.warning(f"networkidle timed out for {doc_id}: {e} — continuing")
+        logger.warning(f"{_wid()}networkidle timed out for {doc_id}: {e} — continuing")
 
 
 def _wait_for_jet_ready(page: Page, source_id: str) -> None:
@@ -255,7 +296,7 @@ def _wait_for_jet_ready(page: Page, source_id: str) -> None:
        fully mounted. Some doc pages don't use ``oj-vb-content`` at all, so
        this wait is best-effort.
     """
-    logger.debug("Waiting for Oracle JET BusyContext to be ready...")
+    logger.debug(f"{_wid()}Waiting for Oracle JET BusyContext to be ready...")
     try:
         page.wait_for_function(
             """() => window.oj
@@ -263,16 +304,20 @@ def _wait_for_jet_ready(page: Page, source_id: str) -> None:
             timeout=60000,
         )
     except PlaywrightTimeoutError as e:
-        logger.warning(f"JET BusyContext not ready for {source_id}: {e} — continuing")
+        logger.warning(
+            f"{_wid()}JET BusyContext not ready for {source_id}: {e} — continuing"
+        )
 
-    logger.debug("Waiting for JET content subtree (oj-vb-content.oj-complete)...")
+    logger.debug(
+        f"{_wid()}Waiting for JET content subtree (oj-vb-content.oj-complete)..."
+    )
     try:
         page.locator("oj-vb-content.oj-complete").first.wait_for(
             state="attached", timeout=45000
         )
     except PlaywrightTimeoutError:
         logger.debug(
-            f"oj-vb-content.oj-complete not seen for {source_id} — "
+            f"{_wid()}oj-vb-content.oj-complete not seen for {source_id} — "
             f"page may not use it, continuing"
         )
 
@@ -293,7 +338,7 @@ def _collect_links(page: Page, source_id: str) -> list[dict]:
     """
     _wait_for_jet_ready(page, source_id)
 
-    logger.debug("Waiting for document links to populate...")
+    logger.debug(f"{_wid()}Waiting for document links to populate...")
     page.wait_for_function(
         """() => {
             const els = document.querySelectorAll(
@@ -342,14 +387,14 @@ def execute_with_retry(func, retries: int = 3, on_retry=None):
         try:
             return func()
         except NoValidLinksFound as e:
-            logger.warning(f"{e} — retrying ({retry}/{retries})")
+            logger.warning(f"{_wid()}{e} — retrying ({retry}/{retries})")
             if retry == retries:
                 raise
             if on_retry is not None:
                 try:
                     on_retry()
                 except Exception as re_err:
-                    logger.warning(f"on_retry hook failed: {re_err!r}")
+                    logger.warning(f"{_wid()}on_retry hook failed: {re_err!r}")
 
 
 def _filename_from_url(url: str) -> str:
@@ -386,7 +431,7 @@ def _download_one(
     href = info.get("href", "") or ""
     data_href = info.get("data_href", "") or ""
     text = info.get("text", "")
-    logger.debug(f"Downloading: {text} - href: {href} - data-href: {data_href}")
+    logger.debug(f"{_wid()}Downloading: {text} - href: {href} - data-href: {data_href}")
 
     try:
         if "javascript" in href:
@@ -400,20 +445,22 @@ def _download_one(
             download = dl_info.value
             target = os.path.join(dest_dir, download.suggested_filename)
             download.save_as(target)
-            logger.debug(f"Saved: {target}")
+            logger.debug(f"{_wid()}Saved: {target}")
         else:
             # Plain URL — reuse browser session cookies via the API request context
             response = context.request.get(href)
             if not response.ok:
-                logger.warning(f"Failed to download {href}: HTTP {response.status}")
+                logger.warning(
+                    f"{_wid()}Failed to download {href}: HTTP {response.status}"
+                )
                 return
             filename = _filename_from_url(href)
             target = os.path.join(dest_dir, filename)
             with open(target, "wb") as f:
                 f.write(response.body())
-            logger.debug(f"Saved: {target}")
+            logger.debug(f"{_wid()}Saved: {target}")
     except PlaywrightTimeoutError as e:
-        logger.warning(f"Download did not trigger for {text!r}: {e}")
+        logger.warning(f"{_wid()}Download did not trigger for {text!r}: {e}")
 
 
 def _launch_browser(p, headed: bool):
@@ -427,10 +474,18 @@ def _launch_browser(p, headed: bool):
 
 
 def _new_context(browser, storage_state: dict | None = None):
-    """Create a download-enabled context, optionally hydrated with ``storage_state``."""
+    """Create a download-enabled context, optionally hydrated with ``storage_state``.
+
+    ``locale`` is set explicitly because Oracle's cloud sign-in JS reads
+    ``navigator.language`` and stamps it into the ``Accept-Language`` header
+    on the ``/v1/oauth2/authorize`` request. Without a locale, Firefox under
+    Playwright leaves ``navigator.language`` undefined and Oracle's gateway
+    rejects the request with HTTP 400, breaking the SSO redirect.
+    """
     kwargs = {
         "viewport": {"width": 1280, "height": 900},
         "accept_downloads": True,
+        "locale": "en-US",
     }
     if storage_state is not None:
         kwargs["storage_state"] = storage_state
@@ -457,7 +512,8 @@ def _load_doc_page(page: Page, source: dict) -> None:
         ).wait_for(timeout=25000)
     except PlaywrightTimeoutError:
         logger.warning(
-            f"Heading matching {source.get('desc')!r} not detected — continuing anyway"
+            f"{_wid()}Heading matching {source.get('desc')!r} not detected — "
+            f"continuing anyway"
         )
 
 
@@ -477,7 +533,7 @@ def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
             on_retry=lambda s=source: _load_doc_page(page, s),
         )
 
-        logger.debug("Start downloading...")
+        logger.debug(f"{_wid()}Start downloading...")
         for idx, info in enumerate(
             progressbar.track(
                 links,
@@ -487,7 +543,7 @@ def _download_source(page: Page, context: BrowserContext, source: dict) -> None:
             _download_one(page, context, idx, info, file_path)
 
     except PlaywrightTimeoutError as e:
-        logger.error(f"Timeout for source {source['doc_id']}: {e!r} — skipping")
+        logger.error(f"{_wid()}Timeout for source {source['doc_id']}: {e!r} — skipping")
 
 
 def _worker_download(
