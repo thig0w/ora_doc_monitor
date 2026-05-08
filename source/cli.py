@@ -54,7 +54,7 @@ def read_json():
     "-w",
     "--workers",
     type=click.IntRange(min=1),
-    default=2,
+    default=1,
     show_default=True,
     help="Parallel worker browsers for auth docs (share a single login).",
 )
