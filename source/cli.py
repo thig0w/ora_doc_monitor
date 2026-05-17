@@ -93,7 +93,8 @@ def get_docs(auth_docs, no_auth_docs, headed, download, workers):
             args=(doc_sources["noauth_req"], not download, login_done),
         )
 
-    with progressbar:
+    progressbar.start()
+    try:
         if auth_docs or is_both:
             thread_docs_auth.start()
         if no_auth_docs or is_both:
@@ -103,6 +104,8 @@ def get_docs(auth_docs, no_auth_docs, headed, download, workers):
             thread_docs_auth.join()
         if no_auth_docs or is_both:
             thread_docs_noauth.join()
+    finally:
+        progressbar.stop()
 
 
 if __name__ == "__main__":

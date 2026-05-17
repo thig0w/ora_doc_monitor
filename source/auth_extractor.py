@@ -221,6 +221,8 @@ def _login(page: Page) -> bool:
     logger.debug(f"{_wid()}Waiting for post-login redirect")
     page.wait_for_url("**/support.oracle.com/**", timeout=60000)
 
+    del mos_user, mos_pass, mos_mfa_raw, mos_mfa_key
+
     # The post-login redirect cascade is long and `networkidle` fires on any
     # 500 ms lull, so it can return mid-cascade — before MOS has finished
     # planting every session cookie. Worker-0 keeps using its live context
