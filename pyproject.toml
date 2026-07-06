@@ -18,6 +18,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "poethepoet>=0.47.1",
     "pre-commit>=4.2.0",
     "pytest>=9.0.2",
     "pytest-mock>=3.15.1",
@@ -119,3 +120,60 @@ docstring-code-format = false
 # This only has an effect when the `docstring-code-format` setting is
 # enabled.
 docstring-code-line-length = "dynamic"
+
+# ---------------------------------------------------------------------------
+# poe the poet tasks
+# ---------------------------------------------------------------------------
+
+[tool.poe.env]
+PYTHONPATH = "source"
+
+[tool.poe.tasks.sync]
+help     = "Upgrade all deps (no cache) and reinstall Playwright Firefox"
+sequence = [
+    { cmd = "uv --no-cache sync --upgrade" },
+    { cmd = "playwright install firefox" },
+]
+
+[tool.poe.tasks.lint]
+help = "Run ruff linter"
+cmd  = "ruff check source/"
+
+[tool.poe.tasks.lint-fix]
+help = "Run ruff linter with auto-fix"
+cmd  = "ruff check source/ --fix"
+
+[tool.poe.tasks.format]
+help = "Run ruff formatter"
+cmd  = "ruff format source/"
+
+[tool.poe.tasks.format-check]
+help = "Check formatting without writing changes"
+cmd  = "ruff format source/ --check"
+
+[tool.poe.tasks.check]
+help     = "Lint + format-check (CI-style, no writes)"
+sequence = [
+    { ref = "lint" },
+    { ref = "format-check" },
+]
+
+[tool.poe.tasks.test]
+help = "Run the test suite"
+cmd  = "pytest -q"
+
+[tool.poe.tasks.run]
+help = "Download all docs (auth + public) then diff"
+cmd  = "uv run python -m source.cli"
+
+[tool.poe.tasks.run-auth]
+help = "Auth (MOS) docs only"
+cmd  = "uv run python -m source.cli --auth_docs"
+
+[tool.poe.tasks.run-noauth]
+help = "Public docs only"
+cmd  = "uv run python -m source.cli --no_auth_docs"
+
+[tool.poe.tasks.run-headed]
+help = "Run with browser window visible (useful for Playwright debugging)"
+cmd  = "uv run python -m source.cli --headed"
