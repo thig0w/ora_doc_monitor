@@ -16,8 +16,22 @@ This project uses **UV**. Use `uv` for all dependency and environment operations
 
 ```bash
 uv sync          # Install dependencies
-uv sync --dev    # Install including dev tools (ruff, pre-commit)
+uv sync --dev    # Install including dev tools (ruff, pre-commit, poethepoet)
 uv build         # Build the package
+```
+
+Common tasks are also available as **poe** shortcuts (requires `uv sync --dev`):
+
+```bash
+poe run          # Download all docs (auth + public) then diff
+poe run-auth     # MOS authenticated docs only
+poe run-noauth   # Public docs only
+poe run-headed   # Run with browser window visible
+poe test         # Run the test suite
+poe check        # Lint + format-check (CI-style, no writes)
+poe lint-fix     # Lint with auto-fix
+poe format       # Format with ruff
+poe sync         # Upgrade all deps (no cache) and reinstall Playwright Firefox
 ```
 
 ## Running the Application
@@ -57,7 +71,7 @@ Values starting with `op://` are resolved at runtime via the `op` CLI (1Password
 All source code lives in `source/`:
 
 - **`cli.py`** — Click-based entry point. Spawns two threads (auth docs + public docs) in parallel. Each thread runs its own download then immediately triggers its own diff — auth and noauth diffs are fully decoupled and run as soon as their respective downloads finish. A `threading.Event` (`login_done`) gates the noauth thread until MOS login finishes, so the two flows do not fight for browser CPU during the SSO handshake.
-- **`auth_extractor.py`** — Playwright/Firefox automation: logs into MOS with TOTP 2FA, then downloads PDFs in parallel workers. N worker threads each launch their own Firefox; worker-0 runs the MOS SSO + TOTP flow inside its own browser and publishes the resulting `storage_state` (cookies + localStorage) on a shared dict, then keeps that same browser open to drain the queue — no dedicated bootstrap browser. Workers 1..N-1 launch their browser in parallel with the login, block on a `threading.Event` until `storage_state` is available, hydrate a context with it, and join the queue. All workers pull the next source off a shared `queue.Queue` until it is empty, so slow docs do not stall the others. `_collect_links()` returns `list[dict]` (keys: `href`, `data_href`, `text`) via a single `page.evaluate` call to avoid races against Oracle JET re-renders. `execute_with_retry` retries on `NoValidLinksFound`.
+- **`auth_extractor.py`** — Playwright/Firefox automation: logs into MOS with TOTP 2FA, then downloads PDFs in parallel workers. N worker threads each launch their own Firefox; worker-0 runs the MOS SSO + TOTP flow inside its own browser and publishes the resulting `storage_state` (cookies + localStorage) on a shared dict, then keeps that same browser open to drain the queue — no dedicated bootstrap browser. Workers 1..N-1 launch their browser in parallel with the login, block on a `threading.Event` until `storage_state` is available, hydrate a context with it, and join the queue. All workers pull the next source off a shared `queue.Queue` until it is empty, so slow docs do not stall the others. `_collect_links()` returns `list[dict]` (keys: `href`, `data_href`, `meta_data`, `text`) via a single `page.evaluate` call to avoid races against Oracle JET re-renders. `execute_with_retry` retries on `NoValidLinksFound`.
 - **`url_extractor.py`** — Downloads PDFs from public Oracle documentation pages by scraping HTML links with BeautifulSoup.
 - **`diff_docs.py`** — Compares work vs. base folders by MD5 hash (not filename), copies diffs to `df_YYYYMMDDHHMM/`, and renders a Rich table (LEFT = new, RIGHT = removed). Renamed-but-unchanged files are ignored. Syncs base folder by removing/moving only changed files, then stores `000_checksumfile.md` in the base folder for the next run. Exposes `diff_auth_folders()` and `diff_noauth_folders()` as separate entry points.
 - **`interface.py`** — Shared `logger` (loguru + Rich handler), `progressbar` (Rich Progress), and `console` (Rich Console) used across all modules.
@@ -73,7 +87,7 @@ All source code lives in `source/`:
 ### Key Design Patterns
 
 - **Oracle JET detection:** Before reading anchors, `_wait_for_jet_ready` blocks on two JET-native readiness signals — `oj.Context.getPageContext().getBusyContext().isReady()` (JET's own busy context) and `oj-vb-content.oj-complete` (Virtual Builder subtree mounted). Both fire strictly after `networkidle`, so this is what prevents catching the DOM mid-render. Only then does `_collect_links` run a `page.wait_for_function` for anchor `href` population. Downloadable file links are identified by CSS selector `a[data-oce-meta-data], a[data-ucm-meta-data]` — two attribute types are used by MOS depending on the asset backend (OCM vs UCM).
-- **Stale element avoidance:** After finding link elements, all attributes (`href`, `data-href`, text) are extracted in a single `page.evaluate` call before Oracle JET can re-render the DOM. The download loop works with plain dicts. For `javascript:` hrefs (Oracle JET session-authenticated downloads), the anchor is re-queried fresh by index immediately before `.click()` inside a `page.expect_download` block — `context.request.get(data_href)` cannot be used here because the download token is only issued through the JET click handler. Plain URLs use `context.request.get()` so browser session cookies carry over without opening a new tab.
+- **Stale element avoidance:** After finding link elements, all attributes (`href`, `data-href`, `data-ucm-meta-data`/`data-oce-meta-data`, text) are extracted in a single `page.evaluate` call before Oracle JET can re-render the DOM. The download loop works with plain dicts. Two cases use click-based download via `page.expect_download`: (1) `javascript:` hrefs (Oracle JET session-authenticated downloads), where the download token is only issued through the JET click handler; (2) cross-domain plain HTTPS links (e.g. `fa-*.ocs.oraclecloud.com`), where `context.request.get()` only carries `support.oracle.com` cookies and gets bounced by the FA auth layer. Same-domain plain URLs use `context.request.get()` so browser session cookies carry over without opening a new tab. When clicking, the anchor is re-queried fresh by index immediately before `.click()` to avoid re-render races. The filename is taken from the `meta_data` JSON (`filename` field) when present, falling back to `download.suggested_filename` or URL path.
 - **Firefox PDF auto-save:** Playwright's `firefox_user_prefs={"pdfjs.disabled": True}` forces PDFs to download instead of rendering inline.
 - **Playwright thread-binding:** `sync_playwright()` handles are bound to the thread that created them, so every browser (each worker) is launched inside its own thread.
 - **Shared session across workers:** Worker-0 runs the SSO flow in its own browser and writes the resulting `storage_state` (cookies + localStorage) to a shared dict. Once `login_done_internal` fires, workers 1..N-1 rehydrate a fresh context from that dict — avoiding the cost and risk of N parallel SSO flows, and avoiding a dedicated bootstrap browser that would close and be re-launched. Worker-0's own browser is reused straight into its download loop. Before returning, `_login` blocks until the account menu button (`#mc-id-sptemplate-account-menu-btn`) on the final MOS landing page (`https://support.oracle.com/support/`) is visible — the post-SSO redirect cascade is long and `networkidle` fires on any brief lull mid-cascade, so without this stronger signal the captured `storage_state` sometimes misses cookies that MOS plants late in the cascade and hydrating workers get bounced to `/signin/`. After the wait, an eager URL check (`/signin` or `login.oracle.com` still in the URL) returns `False` rather than exporting a half-authenticated snapshot.

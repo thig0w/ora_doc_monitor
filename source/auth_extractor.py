@@ -1,3 +1,5 @@
+import contextlib
+import json
 import os
 import queue
 import re
@@ -364,6 +366,8 @@ def _collect_links(page: Page, source_id: str) -> list[dict]:
             return Array.from(els).map((el) => ({
                 href: el.getAttribute('href'),
                 data_href: el.getAttribute('data-href'),
+                meta_data: el.getAttribute('data-ucm-meta-data')
+                    || el.getAttribute('data-oce-meta-data'),
                 text: (el.textContent || '').trim(),
             }));
         }"""
@@ -432,12 +436,30 @@ def _download_one(
     """
     href = info.get("href", "") or ""
     data_href = info.get("data_href", "") or ""
+    meta_data_str = info.get("meta_data", "") or ""
     text = info.get("text", "")
     logger.debug(f"{_wid()}Downloading: {text} - href: {href} - data-href: {data_href}")
 
+    # Filename embedded in the meta-data attribute JSON takes priority over
+    # deriving one from the URL path (which may just be "/download").
+    meta_filename: str | None = None
+    with contextlib.suppress(json.JSONDecodeError, AttributeError):
+        meta_filename = json.loads(meta_data_str).get("filename")
+
+    is_javascript = "javascript" in href
+    # Cross-domain links (e.g. fa-*.ocs.oraclecloud.com) require the browser to
+    # handle the SSO redirect chain — context.request.get() only carries
+    # support.oracle.com cookies and gets bounced.
+    is_cross_domain = (
+        not is_javascript
+        and href.startswith("https://")
+        and "support.oracle.com" not in href
+    )
+
     try:
-        if "javascript" in href:
-            # Session-tied JET download — must be triggered by the click handler.
+        if is_javascript or is_cross_domain:
+            # Session-tied download — must be triggered by the click handler so
+            # the browser handles auth redirects and the JET download token.
             # Re-query the locator right before click so the index points at the
             # current DOM state, avoiding any re-render race.
             with page.expect_download(timeout=120000) as dl_info:
@@ -445,18 +467,20 @@ def _download_one(
                     idx
                 ).click()
             download = dl_info.value
-            target = os.path.join(dest_dir, download.suggested_filename)
+            filename = meta_filename or download.suggested_filename
+            target = os.path.join(dest_dir, filename)
             download.save_as(target)
             logger.debug(f"{_wid()}Saved: {target}")
         else:
-            # Plain URL — reuse browser session cookies via the API request context
+            # Same-domain plain URL — reuse browser session cookies via the API
+            # request context.
             response = context.request.get(href)
             if not response.ok:
                 logger.warning(
                     f"{_wid()}Failed to download {href}: HTTP {response.status}"
                 )
                 return
-            filename = _filename_from_url(href)
+            filename = meta_filename or _filename_from_url(href)
             target = os.path.join(dest_dir, filename)
             with open(target, "wb") as f:
                 f.write(response.body())
