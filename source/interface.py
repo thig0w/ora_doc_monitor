@@ -22,7 +22,7 @@ logger.add(
 
 
 progressbar = Progress(
-    SpinnerColumn(),
+    SpinnerColumn(spinner_name="line"),
     *Progress.get_default_columns(),
     TimeElapsedColumn(),
     console=console,

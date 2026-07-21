@@ -177,3 +177,7 @@ cmd  = "uv run python -m source.cli --no_auth_docs"
 [tool.poe.tasks.run-headed]
 help = "Run with browser window visible (useful for Playwright debugging)"
 cmd  = "uv run python -m source.cli --headed"
+
+[tool.poe.tasks.pre-commit]
+help = "Run pre-commit hooks on all files"
+cmd  = "pre-commit run --all-files"

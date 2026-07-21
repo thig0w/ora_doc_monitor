@@ -139,37 +139,37 @@ os.makedirs(_base_path, exist_ok=True)
 file_path = os.path.join(os.getcwd(), "func_docs_work")
 
 
-def _login(page: Page) -> bool:
+def _login(
+    page: Page,
+    secrets_event: threading.Event,
+    secrets_result: dict,
+) -> bool:
     """Log into MOS through the commercial cloud SSO flow.
 
-    Reads MOSUSER/MOSPASS/MOSMFAKEY from the environment (optionally
-    dereferencing 1Password refs), drives the Oracle sign-in screens
-    (tenancy, identity domain, username, password, TOTP 2FA) and waits
-    for the post-login redirect back to support.oracle.com to settle.
+    Waits for pre-fetched credentials from ``secrets_event``/``secrets_result``
+    then drives the Oracle sign-in screens (tenancy, identity domain,
+    username, password, TOTP 2FA) and waits for the post-login redirect
+    back to support.oracle.com to settle.
 
-    Returns ``True`` on success and ``False`` if the required credentials
-    are missing. All other failure modes raise the underlying Playwright
-    exception to the caller.
+    Returns ``True`` on success and ``False`` if credentials are missing or
+    secret resolution failed. All other failure modes raise the underlying
+    Playwright exception to the caller.
     """
-    # Kick off the sign-in page navigation first with an early-return
-    # ``wait_until="commit"`` — it unblocks as soon as the first bytes land,
-    # leaving the browser to render the page in the background while we go
-    # talk to 1Password. The subsequent ``wait_for(state="visible")`` on the
-    # sign-in button absorbs whatever render time is left, so there's no race.
     logger.debug(f"{_wid()}Opening MOS sign-in page")
     page.goto("https://support.oracle.com/signin/", wait_until="commit")
 
-    logger.debug(f"{_wid()}Resolving secrets")
-    secrets = _resolve_secrets(
-        {
-            "MOSUSER": os.getenv("MOSUSER"),
-            "MOSPASS": os.getenv("MOSPASS"),
-            "MOSMFAKEY": os.getenv("MOSMFAKEY"),
-        }
-    )
+    logger.debug(f"{_wid()}Waiting for secrets")
+    secrets_event.wait()
+
+    if "error" in secrets_result:
+        logger.critical(f"{_wid()}Secret resolution failed: {secrets_result['error']}")
+        return False
+
+    secrets = secrets_result.pop("creds")
     mos_user = secrets["MOSUSER"]
     mos_pass = secrets["MOSPASS"]
     mos_mfa_raw = secrets["MOSMFAKEY"]
+    del secrets
 
     if mos_user is None or mos_pass is None or mos_mfa_raw is None:
         logger.critical(
@@ -581,6 +581,8 @@ def _worker_download(
     worker_result: list,
     worker_id: int,
     is_login_worker: bool,
+    secrets_event: threading.Event | None = None,
+    secrets_result: dict | None = None,
 ) -> None:
     """Auth worker thread body: own Playwright + browser, shared queue.
 
@@ -613,7 +615,7 @@ def _worker_download(
                 page = context.new_page()
                 page.set_default_timeout(60000)
                 try:
-                    ok = _login(page)
+                    ok = _login(page, secrets_event, secrets_result)
                     if ok:
                         login_state["storage_state"] = context.storage_state()
                         login_state["success"] = True
@@ -712,6 +714,32 @@ def download_docs(
             login_done.set()
         return
 
+    # Prefetch secrets in parallel with browser launch so the 1Password
+    # prompt fires immediately rather than after Firefox has started up.
+    secrets_result: dict = {}
+    secrets_event = threading.Event()
+
+    def _prefetch_secrets() -> None:
+        try:
+            creds = _resolve_secrets(
+                {
+                    "MOSUSER": os.getenv("MOSUSER"),
+                    "MOSPASS": os.getenv("MOSPASS"),
+                    "MOSMFAKEY": os.getenv("MOSMFAKEY"),
+                }
+            )
+            for key in ("MOSUSER", "MOSPASS", "MOSMFAKEY"):
+                os.environ.pop(key, None)
+            secrets_result["creds"] = creds
+        except Exception as exc:
+            secrets_result["error"] = exc
+        finally:
+            secrets_event.set()
+
+    threading.Thread(
+        target=_prefetch_secrets, name="secrets-prefetch", daemon=True
+    ).start()
+
     login_state: dict = {"storage_state": None, "success": False}
     login_done_internal = threading.Event()
 
@@ -735,6 +763,10 @@ def download_docs(
                 i,
                 i == 0,
             ),
+            kwargs={
+                "secrets_event": secrets_event if i == 0 else None,
+                "secrets_result": secrets_result if i == 0 else None,
+            },
             name=f"auth-worker-{i}",
         )
         threads.append(t)
