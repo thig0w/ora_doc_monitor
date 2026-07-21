@@ -2,23 +2,28 @@
     "auth_req": [
         {
             "desc": "Merch functional docs",
-            "doc_id": "1585843.1"
+            "old_doc_id": "1585843.1",
+            "doc_id": "KB157214"
         },
         {
             "desc": "Rics func docs",
-            "doc_id": "2643542.1"
+            "old_doc_id": "2643542.1",
+            "doc_id": "KB160911"
         },
         {
             "desc": "RDS func docs",
-            "doc_id": "2899701.1"
+            "old_doc_id": "2899701.1",
+            "doc_id": "KB695722"
         },
         {
             "desc": "POM func docs",
-            "doc_id": "2815461.1"
+            "old_doc_id": "2815461.1",
+            "doc_id": "KB121502"
         },
         {
             "desc": "blueprint func docs",
-            "doc_id": "2677553.1"
+            "old_doc_id": "2677553.1",
+            "doc_id": "KB696323"
         }
     ],
     "noauth_req": [
@@ -52,7 +57,7 @@
         },
         {
             "desc": "rds_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-data-store-cloud-services/latest/index.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-data-store-cloud-services/latest/books.html"
         },
         {
             "desc": "rh_docs",
