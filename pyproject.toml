@@ -1,6 +1,6 @@
 [project]
 name = "oradocmonitor"
-version = "1.0.1"
+version = "1.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -177,3 +177,7 @@ cmd  = "uv run python -m source.cli --no_auth_docs"
 [tool.poe.tasks.run-headed]
 help = "Run with browser window visible (useful for Playwright debugging)"
 cmd  = "uv run python -m source.cli --headed"
+
+[tool.poe.tasks.pre-commit]
+help = "Run pre-commit hooks on all files"
+cmd  = "pre-commit run --all-files"

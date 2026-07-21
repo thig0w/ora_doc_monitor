@@ -72,23 +72,27 @@
         },
         {
             "desc": "ap_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-assortment-planning-cloud-service/26.1.101.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-assortment-planning-cloud-service/26.1.201.0/books.html"
         },
         {
             "desc": "ipo_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-inventory-planning-optimization-cloud/26.1.101.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-inventory-planning-optimization-cloud/26.1.201.0/books.html"
         },
         {
             "desc": "lpo_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-lifecycle-pricing-optimization-cloud/26.1.101.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-lifecycle-pricing-optimization-cloud/26.1.201.0/books.html"
         },
         {
             "desc": "mfp_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/merchandise-financial-planning-cloud/26.1.101.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/merchandise-financial-planning-cloud/26.1.201.0/books.html"
         },
         {
             "desc": "rpas_docs",
-            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-predictive-application-server-cloud-edition/26.1.101.0/books.html"
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-predictive-application-server-cloud-edition/26.1.201.0/books.html"
+        },
+        {
+            "desc": "rscc_docs",
+            "doc_id": "https://docs.oracle.com/en/industries/retail/retail-supply-chain-collaboration-cloud/latest/books.html"
         }
     ],
     "removed": [
