@@ -34,7 +34,7 @@ SSO_DOMAIN_OCID = (
 )
 
 # URL that renders a MOS document page once authenticated.
-DOC_DISPLAY_URL = "https://support.oracle.com/epmos/faces/DocumentDisplay?id="
+DOC_DISPLAY_URL = "https://support.oracle.com/support/?anchorId=&documentId="
 
 
 def _wid() -> str:
@@ -789,8 +789,8 @@ def download_docs(
 if __name__ == "__main__":
     download_docs(
         [
-            {"desc": "Merch functional docs", "doc_id": "1585843.1"},
-            {"desc": "Extensions docs--", "doc_id": "2978473.1"},
+            {"desc": "Merch functional docs", "doc_id": "KB222596"},
+            {"desc": "RDS func docs", "doc_id": "KB695722"},
         ],
         headed=True,
     )
